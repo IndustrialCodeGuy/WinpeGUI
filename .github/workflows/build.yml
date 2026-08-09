@@ -1,0 +1,82 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Locate solution
+        shell: pwsh
+        run: |
+          $solutions = @(Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter *.sln -File)
+
+          if ($solutions.Count -eq 0) {
+              throw 'No solution file was found at the repository root.'
+          }
+
+          if ($solutions.Count -gt 1) {
+              $names = ($solutions.Name -join ', ')
+              throw "More than one root solution was found: $names"
+          }
+
+          "SOLUTION_PATH=$($solutions[0].FullName)" | Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Encoding utf8 `
+              -Append
+
+      - name: Restore
+        shell: pwsh
+        run: dotnet restore "$env:SOLUTION_PATH"
+
+      - name: Build Release
+        shell: pwsh
+        run: dotnet build "$env:SOLUTION_PATH" --configuration Release --no-restore
+
+      - name: Check vulnerable packages
+        shell: pwsh
+        run: dotnet list "$env:SOLUTION_PATH" package --vulnerable --include-transitive
+
+      - name: Publish executable projects
+        shell: pwsh
+        run: |
+          $projects = @(
+              'WinPEGui/WinPEGui.csproj',
+              'Shell.Taskbar.Host/Shell.Taskbar.Host.csproj',
+              'Explorer.Host/Explorer.Host.csproj',
+              'ExplorerPicker/ExplorerPicker.csproj',
+              'BitLocker.Manager/BitLocker.Manager.csproj',
+              'BitLocker.Unlock/BitLocker.Unlock.csproj'
+          )
+
+          foreach ($project in $projects) {
+              $name = [System.IO.Path]::GetFileNameWithoutExtension($project)
+              dotnet publish $project `
+                  --configuration Release `
+                  --no-restore `
+                  --output "artifacts/publish/$name"
+
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Publish failed for $project."
+              }
+          }
