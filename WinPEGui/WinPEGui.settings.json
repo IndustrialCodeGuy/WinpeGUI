@@ -1,0 +1,20 @@
+{
+  "Launcher": {
+    "Shell": {
+      "Path": "Shell.Taskbar.Host.exe",
+      "Args": ""
+    },
+    "FileManager": {
+      "Path": "FileManager.exe",
+      "Args": "-host",
+      "Restart": true
+    },
+    "RestartDelayMs": 500,
+    "CrashBurstLimit": 8,
+    "CrashBurstWindowSeconds": 30,
+    "Log": {
+      "Target": "label:WinPE",
+      "FileName": "WinPEGui.log"
+    }
+  }
+}
