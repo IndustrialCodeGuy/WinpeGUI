@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net8.0-windows</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<StartupObject>ExplorerPicker.Program</StartupObject>
+		<AssemblyName>ExplorerPicker</AssemblyName>
+		<PlatformTarget>x64</PlatformTarget>
+		<RuntimeIdentifier>win-x64</RuntimeIdentifier>
+		<SelfContained>true</SelfContained>
+		<PublishSingleFile>true</PublishSingleFile>
+		<PublishTrimmed>false</PublishTrimmed>
+		<PublishReadyToRun>false</PublishReadyToRun>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\Shell.Core\Shell.Core.csproj" />
+	</ItemGroup>
+
+</Project>
