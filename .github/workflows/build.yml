@@ -61,16 +61,18 @@ jobs:
         shell: pwsh
         run: |
           $projects = @(
-              'WinPEGui/WinPEGui.csproj',
-              'Shell.Taskbar.Host/Shell.Taskbar.Host.csproj',
-              'Explorer.Host/Explorer.Host.csproj',
-              'ExplorerPicker/ExplorerPicker.csproj',
-              'BitLocker.Manager/BitLocker.Manager.csproj',
-              'BitLocker.Unlock/BitLocker.Unlock.csproj'
+              @{ Project = 'WinPEGui/WinPEGui.csproj';                   Name = 'WinPEGui' },
+              @{ Project = 'Shell.Taskbar.Host/Shell.Taskbar.Host.csproj'; Name = 'Shell.Taskbar.Host' },
+              @{ Project = 'Explorer.Host/Explorer.Host.csproj';         Name = 'FileManager' },
+              @{ Project = 'ExplorerPicker/ExplorerPicker.csproj';       Name = 'ExplorerPicker' },
+              @{ Project = 'BitLocker.Manager/BitLocker.Manager.csproj'; Name = 'BitLocker.Manager' },
+              @{ Project = 'BitLocker.Unlock/BitLocker.Unlock.csproj';   Name = 'BitLocker.Unlock' }
           )
 
           foreach ($project in $projects) {
-              $name = [System.IO.Path]::GetFileNameWithoutExtension($project)
+              $project = $entry.Project
+              $name = $entry.Name
+
               dotnet publish $project `
                   --configuration Release `
                   --no-restore `
