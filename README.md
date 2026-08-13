@@ -1,6 +1,6 @@
 # WinPE GUI Shell
 
-WinPE GUI Shell is an independent, third-party graphical shell built from scratch specifically for customized Microsoft Windows Preinstallation Environment (Windows PE) images. It provides a file manager, desktop and taskbar, file operations, file and folder pickers, and BitLocker management utilities.
+WinPE GUI Shell is an independent, third-party graphical shell built from scratch specifically for customized Microsoft Windows Preinstallation Environment (Windows PE) images. It provides a file manager, desktop (non-interactive) and taskbar, file operations, file and folder pickers, and BitLocker management utilities.
 
 Rather than adapting a full Windows desktop shell or assembling the environment around a large collection of third-party tools, WinPE GUI Shell implements the shell experience itself. The result is a comparatively self-contained WinPE GUI with very few runtime dependencies while still providing a broad set of desktop, file-management, and recovery-oriented functions. The published applications are self-contained .NET 8 executables; the shell itself does not require an installed .NET desktop runtime, `WinPE-NetFX`, or PowerShell. Additional WinPE components are needed only for the features that use them, such as WMI and BitLocker support.
 
