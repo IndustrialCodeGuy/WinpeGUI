@@ -1,6 +1,8 @@
 # WinPE GUI Shell
 
-WinPE GUI Shell is an independent, third-party graphical shell for customized Microsoft Windows Preinstallation Environment (Windows PE) images. It provides a file manager, desktop and taskbar, file operations, file and folder pickers, and BitLocker management utilities.
+WinPE GUI Shell is an independent, third-party graphical shell built from scratch specifically for customized Microsoft Windows Preinstallation Environment (Windows PE) images. It provides a file manager, desktop and taskbar, file operations, file and folder pickers, and BitLocker management utilities.
+
+Rather than adapting a full Windows desktop shell or assembling the environment around a large collection of third-party tools, WinPE GUI Shell implements the shell experience itself. The result is a comparatively self-contained WinPE GUI with very few runtime dependencies while still providing a broad set of desktop, file-management, and recovery-oriented functions. The published applications are self-contained .NET 8 executables; the shell itself does not require an installed .NET desktop runtime, `WinPE-NetFX`, or PowerShell. Additional WinPE components are needed only for the features that use them, such as WMI and BitLocker support.
 
 The project is intended for deployment within a Windows PE image that the user creates independently. It is not designed as a replacement for File Explorer on a full Windows installation and is not affiliated with, endorsed by, or distributed by Microsoft.
 
@@ -18,6 +20,7 @@ Windows and Windows PE are trademarks of the Microsoft group of companies. These
 - BitLocker volume status, unlock, lock, and management utilities.
 - Light and dark shell themes.
 - Windowless supervisor that starts and monitors the taskbar and file-manager processes.
+- Purpose-built WinPE shell architecture with minimal runtime dependencies.
 
 ## Architecture
 
@@ -67,6 +70,7 @@ For the complete shell, the expected configuration includes:
 - A current x64 Windows PE image created from the Windows ADK and matching Windows PE add-on.
 - `WinPE-WMI`.
 - `WinPE-SecureStartup`.
+- A matching `imageres.dll.mun` supplied from the user's own properly licensed Windows installation or deployment media and added to the WinPE image. This should be treated as required for the intended shell icon set and complete UI appearance.
 - Required storage, USB, network, display, and other hardware drivers for the target systems.
 - Administrative execution for BitLocker management and other privileged shell operations.
 
@@ -87,6 +91,7 @@ When adding WinPE optional components, use packages that match the architecture 
 | Base x64 WinPE | Starting the shell and basic local file management. |
 | `WinPE-WMI` | Full drive monitoring, WMI device operations, and BitLocker state integration. |
 | `WinPE-SecureStartup` | BitLocker status, unlock, lock, and management functionality. |
+| `imageres.dll.mun` from a licensed Windows source | Intended Windows-style shell imagery, including the Start button icon and other icons used by the taskbar, Start menu, and file manager. |
 | Network drivers and WinPE networking | Network shares, mapped drives, and network tools. |
 | PowerShell optional components | Only external scripts or workflows that specifically require Windows PowerShell. The shell itself does not require PowerShell. |
 | Additional font/language packages | Languages or scripts not present in the base image. |
@@ -102,13 +107,19 @@ This repository does **not** distribute:
 - Microsoft logos, icons, or other graphical assets.
 - `imageres.dll`, `imageres.dll.mun`, or equivalent Windows system resources.
 
-The shell can use Windows system image resources for familiar file, folder, drive, and shell imagery. These Microsoft resources are intentionally not included with the project.
+The shell intentionally uses Windows system image resources for familiar file, folder, drive, Start-menu, and shell imagery without redistributing those Microsoft-owned resources. The current code loads icons from system resource DLLs such as `imageres.dll` and `shell32.dll`.
 
-Users who want the Windows system icons must supply the appropriate resources from their own properly licensed Windows installation or deployment media. Users are responsible for ensuring that those files are appropriate for the WinPE build, architecture, and language being used.
+**For the intended shell UI, `imageres.dll.mun` should be treated as a required deployment file.** It is not included in this repository and must be supplied from the user's own properly licensed Windows installation or deployment media. On current Windows resource layouts, copy the matching file into the mounted WinPE image as:
+
+```text
+%SystemRoot%\SystemResources\imageres.dll.mun
+```
+
+The file should match the Windows/WinPE build, architecture, and language resources being used. If the corresponding `imageres.dll` is not already present in the target image, it must likewise be supplied from an appropriate matching Windows source.
+
+The shell can still start when these image resources are absent, and generic fallback behavior exists for some requested icons. However, the UI is incomplete in that state: icons sourced from `imageres.dll` will be missing or degraded. This includes the Start button icon, which the shell loads directly from `imageres.dll`, along with other Start-menu, taskbar, and file-manager imagery. In practice, `imageres.dll.mun` should be copied into the WinPE image as part of a normal deployment rather than treated as an optional cosmetic addition.
 
 Do not submit Microsoft system files to this repository or include them with a project release.
-
-The shell includes generic fallback behavior when requested Windows system resources cannot be loaded, although visual fidelity may be reduced.
 
 ## Build
 
@@ -206,16 +217,27 @@ The file-manager host, taskbar host, and BitLocker manager locate their companio
 
 ## WinPE startup
 
-Configure `winpeshl.ini` to launch the top-level supervisor.
+A ready-to-use `winpeshl.ini` is included at the repository root. For a standard deployment matching the checked-in file, place the shell under:
 
-For a shell deployed to `%SYSTEMDRIVE%\Shell`:
-
-```ini
-[LaunchApp]
-AppPath = %SYSTEMDRIVE%\Shell\WinPEGui.exe
+```text
+%SYSTEMROOT%\WinpeGUI\
 ```
 
-Adjust the path to match the location used in the image.
+and copy the repository's `winpeshl.ini` into the mounted WinPE image at:
+
+```text
+%SYSTEMROOT%\System32\winpeshl.ini
+```
+
+The checked-in file currently contains:
+
+```ini
+[LaunchApps]
+%SYSTEMROOT%\System32\wpeinit.exe
+"%SYSTEMROOT%\WinpeGUI\WinPEGui.exe"
+```
+
+This allows WinPE initialization to run first and then starts the top-level `WinPEGui.exe` supervisor. If the shell is deployed to a different directory, edit the executable path in `winpeshl.ini` to match.
 
 `WinPEGui.exe` is windowless and normally supervises:
 
@@ -309,7 +331,8 @@ Important scenarios include:
 - Network drives and mapped shares.
 - BitLocker-locked and otherwise unavailable volumes.
 - File and folder picker calls from intended scripts or applications.
-- Operation both with and without user-supplied Windows image resources.
+- Presence of the user-supplied `imageres.dll.mun` resource and correct Start/taskbar/file-manager icon rendering.
+- Degraded/fallback behavior when user-supplied Windows image resources are intentionally omitted.
 
 ## License
 
