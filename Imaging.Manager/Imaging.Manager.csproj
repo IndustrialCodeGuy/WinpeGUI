@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <StartupObject>Imaging.Manager.Program</StartupObject>
+    <AssemblyName>Imaging.Manager</AssemblyName>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishReadyToRun>false</PublishReadyToRun>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Imaging.Core\Imaging.Core.csproj" />
+    <ProjectReference Include="..\BitLocker.Core\BitLocker.Core.csproj" />
+    <ProjectReference Include="..\Shared.Shell\Shared.Shell.csproj" />
+  </ItemGroup>
+</Project>
