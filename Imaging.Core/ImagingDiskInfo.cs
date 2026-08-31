@@ -1,3 +1,5 @@
+using BitLocker.Core;
+
 namespace Imaging.Core;
 
 public sealed class ImagingDiskInfo
@@ -45,6 +47,10 @@ public sealed class ImagingBitLockerVolumeInfo
     public string VolumeLabel { get; init; } = string.Empty;
     public bool? IsLocked { get; init; }
     public bool IsEncrypted { get; init; }
+    public bool IsBitLockerCapable { get; init; }
+    public bool IsSystemVolume { get; init; }
+    public string VolumeTypeText { get; init; } = string.Empty;
+    public BitLockerVisualState VisualState { get; init; }
     public int? EncryptionPercentage { get; init; }
     public string ConversionStatus { get; init; } = string.Empty;
     public string EncryptionType { get; init; } = string.Empty;
