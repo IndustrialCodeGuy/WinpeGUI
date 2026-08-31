@@ -116,6 +116,35 @@ namespace Shell.Taskbar.UI
                 menu.Items.Add(bitLockerManager);
             }
 
+            if (_showImagingManagerStartMenu)
+            {
+                if (!_showBitLockerManagerStartMenu)
+                    menu.Items.Add(MakeStartMenuSeparator());
+
+                string imagingManagerPath = Path.Combine(
+                    AppContext.BaseDirectory,
+                    "Imaging.Manager.exe");
+
+                string? imagingManagerArgs = ShellTheme.DarkMode ? "--dark" : null;
+                var imagingManager = new ToolStripMenuItem("Imaging Manager")
+                {
+                    Image = Icons.FromSystemDll(
+                        ShellOwnedWindowIcons.IconDllName,
+                        ShellOwnedWindowIcons.ImagingManagerIconIndex,
+                        rootPx)
+                };
+                WireStartMenuItemMouse(
+                    imagingManager,
+                    onLeftClick: () => OpenImagingManager(),
+                    buildRightClickMenu: () => BuildStartItemContextMenu(
+                        "Imaging Manager",
+                        () => OpenImagingManager(),
+                        !_isWinPE
+                            ? () => LaunchProcessElevated(imagingManagerPath, imagingManagerArgs, AppContext.BaseDirectory)
+                            : null));
+                menu.Items.Add(imagingManager);
+            }
+
             menu.Items.Add(MakeStartMenuSeparator());
 
             string registryEditorPath = Path.Combine(
