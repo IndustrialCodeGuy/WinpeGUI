@@ -1,4 +1,4 @@
-﻿
+
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.14.36915.13
@@ -26,6 +26,10 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WinPEGui", "WinPEGui\WinPEGui.csproj", "{31CE6286-0ED0-EDB4-8B0F-C609415B2CD1}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Shell.Taskbar.Host", "Shell.Taskbar.Host\Shell.Taskbar.Host.csproj", "{7EB779A7-7448-ACCB-4E4C-4C44FAC8F3C5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Imaging.Core", "Imaging.Core\Imaging.Core.csproj", "{867B5D42-8B63-C235-D033-A0D30F228CD6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Imaging.Manager", "Imaging.Manager\Imaging.Manager.csproj", "{3B28A0AF-E12B-3BC8-EF20-EF3096D05A6C}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -81,6 +85,14 @@ Global
 		{7EB779A7-7448-ACCB-4E4C-4C44FAC8F3C5}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7EB779A7-7448-ACCB-4E4C-4C44FAC8F3C5}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{7EB779A7-7448-ACCB-4E4C-4C44FAC8F3C5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{867B5D42-8B63-C235-D033-A0D30F228CD6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{867B5D42-8B63-C235-D033-A0D30F228CD6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{867B5D42-8B63-C235-D033-A0D30F228CD6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{867B5D42-8B63-C235-D033-A0D30F228CD6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3B28A0AF-E12B-3BC8-EF20-EF3096D05A6C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3B28A0AF-E12B-3BC8-EF20-EF3096D05A6C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3B28A0AF-E12B-3BC8-EF20-EF3096D05A6C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3B28A0AF-E12B-3BC8-EF20-EF3096D05A6C}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
