@@ -55,3 +55,32 @@ public sealed class WimImageInfoResult
     public string Output { get; init; } = string.Empty;
     public IReadOnlyList<WimImageInfo> Images { get; init; } = Array.Empty<WimImageInfo>();
 }
+
+
+public sealed class WimMountedImageInfo
+{
+    public string MountDirectory { get; init; } = string.Empty;
+    public string ImageFile { get; init; } = string.Empty;
+    public int ImageIndex { get; init; }
+    public bool ReadWrite { get; init; }
+    public string Status { get; init; } = string.Empty;
+
+    public string DisplayName
+    {
+        get
+        {
+            string file = string.IsNullOrWhiteSpace(ImageFile) ? "Mounted WIM" : Path.GetFileName(ImageFile);
+            string index = ImageIndex > 0 ? $" [{ImageIndex}]" : string.Empty;
+            return $"{file}{index} — {MountDirectory}";
+        }
+    }
+}
+
+public sealed class WimMountedImageInfoResult
+{
+    public bool Success { get; init; }
+    public bool Canceled { get; init; }
+    public int ExitCode { get; init; }
+    public string Output { get; init; } = string.Empty;
+    public IReadOnlyList<WimMountedImageInfo> Images { get; init; } = Array.Empty<WimMountedImageInfo>();
+}

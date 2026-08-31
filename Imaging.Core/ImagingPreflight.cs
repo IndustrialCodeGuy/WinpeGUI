@@ -69,6 +69,47 @@ public static class ImagingPreflight
                 StringComparison.OrdinalIgnoreCase));
     }
 
+
+    public static string? ValidateWimDeploySourceAndRuntime(
+        ImagingDiskInfo targetDisk,
+        IReadOnlyList<ImagingDiskInfo> allDisks,
+        string imagePath,
+        string applicationBaseDirectory)
+    {
+        ImagingDiskInfo? imageDisk = DiskInventory.FindDiskForPath(allDisks, imagePath);
+        if (imageDisk?.DiskNumber == targetDisk.DiskNumber)
+        {
+            return $"The WIM file is stored on Disk {targetDisk.DiskNumber}. Deploying the image would erase the source WIM during the operation.";
+        }
+
+        ImagingDiskInfo? applicationDisk = DiskInventory.FindDiskForPath(allDisks, applicationBaseDirectory);
+        if (applicationDisk?.DiskNumber == targetDisk.DiskNumber)
+        {
+            return $"Imaging Manager is running from Disk {targetDisk.DiskNumber}. The disk hosting the running imaging tools cannot be erased for WIM deployment.";
+        }
+
+        HashSet<string> mountedRoots = Directory.GetLogicalDrives()
+            .Select(ImagingPath.NormalizeDriveRoot)
+            .Where(static root => root.Length > 0)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (string requiredRoot in new[] { @"C:\", @"S:\", @"R:\" })
+        {
+            if (!mountedRoots.Contains(requiredRoot))
+                continue;
+
+            ImagingDiskInfo? owner = DiskInventory.FindDiskForPath(allDisks, requiredRoot);
+            if (owner?.DiskNumber == targetDisk.DiskNumber)
+                continue;
+
+            string ownerText = owner == null ? "another mounted volume" : $"Disk {owner.DiskNumber}";
+            return $"Deploy WIM uses {requiredRoot.TrimEnd('\\')} as a temporary deployment drive letter, but that letter is currently in use by {ownerText}. " +
+                   "Remove or reassign that drive letter before deployment.";
+        }
+
+        return null;
+    }
+
     public static string? ValidateApplySourceAndRuntime(
         ImagingDiskInfo targetDisk,
         IReadOnlyList<ImagingDiskInfo> allDisks,
