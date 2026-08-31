@@ -21,9 +21,10 @@ Windows and Windows PE are trademarks of the Microsoft group of companies. These
 - File and folder picker helper for scripts and external applications.
 - BitLocker volume status, unlock, lock, and management utilities.
 - Physical-disk FFU capture and apply operations.
-- Partition-scoped WIM capture, append, and apply operations.
+- WIM capture/append, clean partition apply, whole-disk deployment, export, mount/unmount, and offline driver injection.
 - BitLocker-aware imaging status, volume icons, and direct unlock integration.
 - Windows RE staging support when capturing an installed Windows partition to WIM.
+- Imaging Manager integration in the Start menu when `Imaging.Manager.exe` is deployed alongside the shell.
 - Light and dark shell themes.
 - Windowless supervisor that starts and monitors the taskbar and file-manager processes.
 - Purpose-built WinPE shell architecture with minimal runtime dependencies.
@@ -40,14 +41,14 @@ The source tree is divided into executable and supporting library projects:
 | `ExplorerPicker` | Command-line client for open-file, save-file, and folder-selection dialogs. |
 | `BitLocker.Manager` | Administrative BitLocker volume-management interface. |
 | `BitLocker.Unlock` | Per-volume BitLocker unlock prompt. |
-| `Imaging.Manager` | Physical-disk and partition imaging interface for FFU and WIM operations. |
+| `Imaging.Manager` | Physical-disk and partition imaging and offline WIM-servicing interface. |
 | `Shell.Core` | Shared models, contracts, launch requests, and picker IPC. |
 | `Shell.Infrastructure` | File-system, drive-state, file-association, and window-coordination services. |
 | `Explorer.UI` | File-manager window and navigation user interface. |
 | `Shell.Taskbar` | Desktop and taskbar user interface. |
 | `Shared.Shell` | Shared Win32 helpers, theming, icons, and shell utilities. |
 | `BitLocker.Core` | BitLocker backends, state models, and activation helpers. |
-| `Imaging.Core` | Physical-disk inventory, DISM FFU/WIM backends, imaging preflight logic, temporary drive-letter handling, and Windows RE staging. |
+| `Imaging.Core` | Physical-disk inventory, DISM FFU/WIM backends, WIM deployment and servicing logic, imaging preflight logic, partition formatting, temporary drive-letter handling, and Windows RE staging. |
 
 `WinPEGui.exe` normally starts and supervises:
 
@@ -57,6 +58,8 @@ FileManager.exe -host
 ```
 
 The taskbar and file-manager host remain separate processes so file-manager work does not block the taskbar UI thread. Companion utilities such as BitLocker Manager and Imaging Manager are launched on demand from the shell.
+
+When `Imaging.Manager.exe` is present in the shell application directory, the Start menu automatically exposes an **Imaging Manager** entry. The entry follows the active shell theme and launches the companion application from that same directory. If the executable is omitted, the menu item is omitted as well.
 
 ## Requirements
 
@@ -88,7 +91,9 @@ For the complete shell, the expected configuration includes:
 
 The BitLocker status backend expects `manage-bde.exe`, which is supplied by the WinPE Secure Startup component.
 
-Imaging Manager uses the Windows deployment tools available in WinPE, including `DISM.exe` for FFU/WIM operations and `DiskPart.exe` when a temporary drive letter is required. Automatic Windows RE staging also requires `reagentc.exe` to be available either in WinPE or in the selected offline Windows installation.
+Imaging Manager uses the Windows deployment tools available in WinPE, including `DISM.exe`, `DiskPart.exe`, and BCDBoot where appropriate. Automatic Windows RE staging/configuration also requires `reagentc.exe` to be available either in WinPE or in the selected/applied offline Windows installation.
+
+Imaging Manager uses `ExplorerPicker.exe` for its file and folder selection dialogs and reuses `BitLocker.Unlock.exe` for integrated volume unlock operations. Those companion executables should be deployed alongside `Imaging.Manager.exe`.
 
 The applications are published as self-contained .NET 8 executables. The target image does not require the .NET desktop runtime or `WinPE-NetFX` solely to run WinPE GUI Shell.
 
@@ -110,37 +115,53 @@ Features whose supporting WinPE components are absent may be unavailable or fail
 
 ## Imaging Manager
 
-Imaging Manager is a companion application for physical-disk and partition imaging from WinPE. Its selection model intentionally separates whole-disk FFU operations from partition-scoped WIM operations.
+Imaging Manager is a companion application for physical-disk, partition, and WIM-file operations from WinPE. Its selection model intentionally separates whole-disk FFU/deployment operations from partition-scoped WIM operations while also exposing file-based WIM servicing actions that do not require a disk selection.
 
-### Physical disk selected
+The action column currently contains:
 
-When only a physical disk is selected, Imaging Manager exposes:
+```text
+Capture FFU
+Apply FFU
+Mount WIM
+Unmount WIM
+Capture WIM
+Apply WIM
+Deploy WIM
+Export WIM
+Add Drivers
+Unlock
+Refresh
+```
 
-- **Capture FFU** using DISM `/Capture-FFU`.
-- **Apply FFU** using DISM `/Apply-FFU`.
+Availability changes with the current disk/partition selection, BitLocker state, and DISM mounted-image inventory.
+
+### Physical disk and FFU operations
+
+When a physical disk is selected, Imaging Manager exposes physical-disk information and FFU operations:
+
+- Capture FFU using DISM `/Capture-FFU`.
+- Apply FFU using DISM `/Apply-FFU`.
 - Physical-disk, partition, and BitLocker suitability information.
 
 FFU operates on the complete physical disk. Applying an FFU overwrites the target disk rather than an individual partition.
 
 Imaging Manager checks BitLocker state before FFU capture and strongly warns when encrypted volumes are present. Unlocking or suspending BitLocker does not decrypt the sectors on disk; a fully decrypted source is preferred before FFU capture. BitLocker status that cannot be determined is treated as unknown rather than as safe.
 
-### Partition selected
+### Partition selection and BitLocker integration
 
-Selecting a partition changes the active scope to that partition. FFU actions are disabled and the partition action row exposes:
-
-- **Capture WIM**
-- **Apply WIM**
-- **Unlock** when the selected volume is BitLocker-locked
+Selecting a partition changes the active partition scope. FFU actions are disabled for the partition selection, while partition-scoped WIM capture/apply operations can target that volume.
 
 Partition tiles use the same BitLocker-aware drive icon states used by the file manager and BitLocker Manager, including locked, unlocked/protected, protection-off, system-drive, and unknown-state variants where applicable.
 
-The Unlock action reuses `BitLocker.Unlock.exe`; Imaging Manager does not duplicate password/recovery-key handling.
+The **Unlock** action reuses `BitLocker.Unlock.exe`; Imaging Manager does not duplicate password/recovery-key handling.
 
 ### Capture WIM
 
 Capture WIM uses DISM `/Capture-Image` against the selected partition.
 
 Any selected partition may be offered for WIM capture. If the partition does not currently have a drive letter, Imaging Manager attempts to assign an unused temporary drive letter with DiskPart and removes it after the operation. Partitions without a mountable filesystem may still fail when Windows/DiskPart cannot expose them; the UI does not preemptively prohibit the attempt solely because the partition is hidden or normally unlettered.
+
+New WIM captures explicitly use DISM `/Compress:max`.
 
 If the selected destination WIM does not exist, a new WIM is created.
 
@@ -150,7 +171,7 @@ If the destination WIM already exists, Imaging Manager offers:
 - **Append** — preserve the existing WIM and add the new capture as another image index using DISM `/Append-Image`.
 - **Cancel**.
 
-Append modifies the existing WIM in place. Ensure the destination has sufficient free space before appending.
+Append modifies the existing WIM in place. The appended image uses the compression type already established by the existing WIM. Ensure the destination has sufficient free space before appending.
 
 #### Windows RE staging
 
@@ -181,16 +202,99 @@ Apply WIM uses DISM `/Apply-Image` against the currently selected partition.
 
 After a WIM is selected, Imaging Manager reads its image information and allows the desired image/index to be selected before applying it.
 
-The current Apply WIM operation is deliberately a regular partition-scoped DISM apply. It does **not**:
+Before DISM starts, the selected target volume is quick-formatted as NTFS. The format is directed at the exact active drive letter and verified with a temporary marker file. If the marker survives the format, Imaging Manager treats the format as failed and does not start DISM. This prevents an unsuccessful format from silently turning into an apply over an existing Windows tree.
 
-- format the target partition;
-- repartition the disk;
-- recreate EFI, MSR, or Recovery partitions;
-- run BCDBoot;
-- configure Windows RE; or
-- modify neighboring partitions as part of a deployment workflow.
+Apply WIM remains partition-scoped. It does not repartition the disk or intentionally modify neighboring partitions as part of the restore.
 
-Because the target is not formatted first, files already present on the target partition that are not replaced by the WIM may remain after the apply. A future full deployment/clean-restore workflow should remain a separate operation from this regular Apply WIM behavior.
+The confirmation dialog includes **Configure Windows boot files after apply (BCDBoot)**. The option defaults on only when the pre-format target contains a recognizable Windows installation at:
+
+```text
+Windows\System32\Config\SYSTEM
+```
+
+Blank, data, and test partitions therefore default to leaving the machine boot configuration unchanged. The user can override the option in either direction before starting the apply.
+
+When boot configuration is requested and the successfully applied image contains a Windows directory, Imaging Manager runs BCDBoot against the restored Windows installation. Regular Apply WIM does not hard-code a system-partition drive letter; BCDBoot is allowed to use the existing firmware/system-partition configuration. If boot configuration is requested but the applied image does not contain Windows, the image apply itself succeeds and Imaging Manager reports that the BCDBoot step was skipped.
+
+### Deploy WIM
+
+Deploy WIM is the whole-disk counterpart to Apply WIM. It is intended for a blank/replacement disk or a deployment where the existing partition layout does not need to be preserved.
+
+Deploy WIM detects whether WinPE was booted in UEFI or BIOS mode and creates a matching target-disk layout.
+
+For UEFI systems, the deployment workflow creates a GPT layout containing:
+
+- EFI System partition.
+- Microsoft Reserved (MSR) partition.
+- Windows partition.
+- Windows Recovery partition.
+
+For BIOS systems, the deployment workflow creates an MBR layout containing:
+
+- Active System partition.
+- Windows partition.
+- Windows Recovery partition.
+
+Deploy WIM then:
+
+1. Cleans/repartitions the selected physical disk.
+2. Applies the selected WIM image to the new Windows partition.
+3. Requires the applied image to contain `C:\Windows`.
+4. Configures boot files with BCDBoot against the newly created System partition.
+5. If `winre.wim` is present in the applied Windows image, copies it to the new Recovery partition and registers it with REAgentC.
+6. Hides the Recovery partition and verifies the Windows RE configuration where possible.
+
+Because Deploy WIM is disk-scoped, all existing partitions and data on the target disk are disposable.
+
+### Export WIM
+
+Export WIM is a file-to-file operation and does not require a disk or partition selection.
+
+Imaging Manager reads the source WIM indexes, lets the desired image be selected, then exports it to a separate WIM using DISM `/Export-Image /Compress:max /CheckIntegrity`.
+
+An existing destination requires explicit replacement confirmation. The source and destination cannot be the same file. A failed or canceled export removes the partial destination WIM rather than leaving an incomplete image behind.
+
+### Mount WIM
+
+Mount WIM is a file-based operation and does not require a disk or partition selection.
+
+Imaging Manager:
+
+1. Selects a source WIM.
+2. Reads its image indexes and allows the desired image to be selected.
+3. Selects an existing mount folder through `ExplorerPicker.exe`.
+4. Requires the mount directory to be empty.
+5. Mounts the image read/write with DISM `/Mount-Image` and `/CheckIntegrity`.
+
+Once DISM begins the mount, the operation is intentionally not exposed as cancellable so Imaging Manager does not deliberately terminate DISM while a mount is being registered.
+
+### Unmount WIM
+
+Unmount WIM uses DISM's current mounted-image inventory, so it can recognize WIMs mounted before Imaging Manager was started or mounted by another process.
+
+If more than one WIM is mounted, Imaging Manager allows the target to be selected.
+
+The unmount dialog offers:
+
+- **Commit** — save pending changes with DISM `/Unmount-Image /Commit /CheckIntegrity`.
+- **Discard** — unmount without preserving pending changes.
+- **Cancel**.
+
+Read-only mounts can be discarded but cannot be committed.
+
+### Add Drivers
+
+Add Drivers is enabled whenever DISM reports at least one mounted WIM. The selected target must be a writable mounted WIM.
+
+Imaging Manager selects a driver folder and services the mounted image with DISM `/Add-Driver /Driver:<folder> /Recurse`, recursively adding supported INF driver packages.
+
+Imaging Manager does not use `/ForceUnsigned`. Unsigned packages therefore remain subject to DISM's normal validation behavior.
+
+Driver changes remain pending in the mounted image until the WIM is unmounted with **Commit**. Choosing **Discard** removes those pending changes.
+
+### Refresh and mounted-image state
+
+**Refresh** re-queries both the physical-disk inventory and DISM's mounted-WIM inventory. This allows Imaging Manager to recognize WIM mount/unmount activity that occurred outside the application.
 
 ### Imaging safety checks
 
@@ -201,11 +305,16 @@ Current imaging safeguards include:
 - FFU apply is blocked when Imaging Manager itself is running from the target disk.
 - WIM capture cannot be saved onto the partition being captured.
 - WIM apply prevents using a source WIM stored on the selected target partition.
+- Apply WIM verifies that its destructive target format actually occurred before starting DISM.
+- Apply WIM configures boot files only when the user-selected BCDBoot option is enabled.
+- Deploy WIM requires explicit whole-disk targeting and recreates the target partition layout.
+- Export WIM prevents using the same file as both source and destination and removes incomplete output after failure/cancellation.
 - Imaging Manager avoids deleting an existing WIM if an append operation fails or is canceled.
 - Temporary source/target/Recovery drive-letter cleanup failures are surfaced to the user.
 - Temporarily staged WinRE files are removed after WIM capture when Imaging Manager added them.
+- Mounted-WIM servicing does not force unsigned drivers.
 
-Imaging operations are destructive by nature. Verify the selected physical disk, partition, source image, and destination before starting an operation.
+Imaging operations are destructive by nature. Verify the selected physical disk, partition, source image, destination, and commit/discard choice before starting an operation.
 
 ## Microsoft system resources are not included
 
@@ -327,7 +436,9 @@ Imaging.Manager.exe
 
 The publish output may also contain supporting files intentionally copied by individual projects, such as `README-WinPEGui.txt`.
 
-The file-manager host, taskbar host, BitLocker Manager, and Imaging Manager locate companion executables relative to their own application directory. Imaging Manager's integrated Unlock action therefore expects `BitLocker.Unlock.exe` to be deployed alongside it.
+The file-manager host, taskbar host, BitLocker Manager, and Imaging Manager locate companion executables relative to their own application directory. In particular, Imaging Manager expects `ExplorerPicker.exe` for its file/folder dialogs and `BitLocker.Unlock.exe` for its integrated Unlock action.
+
+When `Imaging.Manager.exe` is deployed alongside `Shell.Taskbar.Host.exe`, the shell exposes the Imaging Manager Start-menu entry automatically; no separate integration patch or menu configuration is required.
 
 ## WinPE startup
 
@@ -398,6 +509,8 @@ The shell executables recognize:
 
 When using `WinPEGui`, apply the desired theme arguments to both the taskbar host and file-manager host in `WinPEGui.settings.json` so the shell uses a consistent theme.
 
+Companion applications launched by the shell, including Imaging Manager, follow the active shell theme where supported.
+
 ## File picker
 
 `ExplorerPicker.exe` communicates with the running file-manager host and writes the selected path to standard output. It can optionally write the result to a file.
@@ -434,6 +547,7 @@ Important scenarios include:
 - Recovery-password unlock.
 - Recovery-key-file unlock.
 - BitLocker volume locking.
+- Imaging Manager presence/absence in the Start menu based on whether `Imaging.Manager.exe` is deployed.
 - Imaging Manager physical-disk and partition enumeration.
 - FFU capture to a different physical disk.
 - FFU apply and destructive-target confirmation.
@@ -443,9 +557,24 @@ Important scenarios include:
 - Windows-partition WIM capture with `winre.wim` already present.
 - Windows-partition WIM capture with WinRE temporarily staged from the configured Recovery partition.
 - WinRE staging failure and cleanup-warning paths.
+- New Capture WIM `/Compress:max` behavior.
 - WIM replace and append-to-existing-WIM behavior.
-- Multi-index WIM enumeration and Apply WIM image selection.
-- Regular Apply WIM behavior without formatting or repartitioning.
+- Multi-index WIM enumeration and image selection.
+- Apply WIM target quick-format and marker verification.
+- Apply WIM to an existing Windows partition with BCDBoot defaulted on.
+- Apply WIM to blank/data/test partitions with BCDBoot defaulted off.
+- Apply WIM with the BCDBoot option manually enabled and disabled.
+- Apply WIM failure paths where DISM succeeds but boot configuration fails or is skipped.
+- Deploy WIM on UEFI/GPT systems.
+- Deploy WIM on BIOS/MBR systems where supported by the target hardware.
+- Deploy WIM boot configuration and Windows RE population/registration.
+- Export WIM, including multi-index selection, replacement confirmation, and cancellation cleanup.
+- Mount WIM to an empty folder.
+- Recognition of WIMs mounted outside Imaging Manager.
+- Unmount WIM with Commit and Discard.
+- Read-only mounted-WIM handling.
+- Add Drivers against a writable mounted WIM, including recursive INF discovery.
+- Mounted-image refresh behavior.
 - Imaging Manager BitLocker-aware partition icons and integrated Unlock action.
 - Temporary drive-letter cleanup after success, failure, and cancellation.
 - DPI changes between monitors and scaling levels.
@@ -468,4 +597,4 @@ WinPE GUI Shell is source-available under the PolyForm Noncommercial License 1.0
 
 Noncommercial use is permitted under the license. Commercial or other for-profit use requires separate permission from the copyright holder.
 
-See `LICENSE.md` for the complete terms.
+See [LICENSE.md](LICENSE.md) for the complete terms.
