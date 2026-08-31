@@ -64,9 +64,14 @@ public partial class MainForm
         if (_btnCapture is not null) _btnCapture.Font = _chromeFont;
         if (_btnApply is not null) _btnApply.Font = _chromeFont;
         if (_btnRefresh is not null) _btnRefresh.Font = _chromeFont;
+        if (_btnMountWim is not null) _btnMountWim.Font = _chromeFont;
+        if (_btnUnmountWim is not null) _btnUnmountWim.Font = _chromeFont;
         if (_btnCaptureWim is not null) _btnCaptureWim.Font = _chromeFont;
         if (_btnApplyWim is not null) _btnApplyWim.Font = _chromeFont;
+        if (_btnExportWim is not null) _btnExportWim.Font = _chromeFont;
+        if (_btnAddDrivers is not null) _btnAddDrivers.Font = _chromeFont;
         if (_btnUnlock is not null) _btnUnlock.Font = _chromeFont;
+        if (_btnDeployWim is not null) _btnDeployWim.Font = _chromeFont;
         if (_lblStatus is not null) _lblStatus.Font = _chromeFont;
         if (_txtDiskStatus is not null) _txtDiskStatus.Font = _detailFont;
 
@@ -276,11 +281,11 @@ public partial class MainForm
 
     private sealed class ImagingManagerLayoutMetrics
     {
-        // Keep the top-level geometry aligned with BitLocker.Manager. The final
-        // width may be a few pixels wider than 610 DIP when the three-button
-        // detail minimum requires it, exactly as it is in BitLocker.Manager.
+        // Keep the width geometry aligned with BitLocker.Manager. The 412-DIP
+        // client height also fits four 94-DIP disk tiles without a vertical
+        // scrollbar while leaving a little resize breathing room.
         public int InitialClientWidthDip { get; init; } = 610;
-        public int InitialClientHeightDip { get; init; } = 370;
+        public int InitialClientHeightDip { get; init; } = 412;
         public int DiskPaneDefaultWidthDip { get; init; } = 128;
         public int DiskPaneMinimumWidthDip { get; init; } = 112;
         public int DiskPaneMaximumWidthDip { get; init; } = 180;
@@ -289,9 +294,11 @@ public partial class MainForm
         public int SplitterWidthPx { get; init; } = 1;
         public int DetailMarginDip { get; init; } = 12;
         public int DetailGapDip { get; init; } = 8;
-        public int DetailButtonWidthDip { get; init; } = 150;
+        public int DetailButtonGapDip { get; init; } = 5;
+        public int DetailButtonWidthDip { get; init; } = 140;
         public int DetailButtonHeightDip { get; init; } = 30;
         public int DetailStatusHeightDip { get; init; } = 20;
+        public int DetailContentMinimumWidthDip { get; init; } = 340;
 
         public int DiskTileHeightDip { get; init; } = 94;
         public int DiskTileIconTopDip { get; init; } = 8;
@@ -332,6 +339,7 @@ public partial class MainForm
         public int SplitterWidth { get; init; }
         public int DetailMargin { get; init; }
         public int DetailGap { get; init; }
+        public int DetailButtonGap { get; init; }
         public int DetailButtonWidth { get; init; }
         public int DetailButtonHeight { get; init; }
         public int DetailStatusHeight { get; init; }
@@ -361,13 +369,19 @@ public partial class MainForm
         {
             int margin = scale(dip.DetailMarginDip);
             int gap = scale(dip.DetailGapDip);
+            int buttonGap = scale(dip.DetailButtonGapDip);
             int buttonWidth = scale(dip.DetailButtonWidthDip);
             int buttonHeight = scale(dip.DetailButtonHeightDip);
             int statusHeight = scale(dip.DetailStatusHeightDip);
             int paneMin = scale(dip.DiskPaneMinimumWidthDip);
             int paneMax = Math.Max(paneMin, scale(dip.DiskPaneMaximumWidthDip));
             int paneDefault = Math.Clamp(scale(dip.DiskPaneDefaultWidthDip), paneMin, paneMax);
-            int detailMin = (margin * 2) + (buttonWidth * 3) + (gap * 2);
+            // The detail pane is now a content column plus a fixed action column.
+            // Keep the content column wide enough for three 112-DIP partition tiles
+            // without a horizontal scrollbar at the default window size. The
+            // action column is slightly narrower to offset most of that growth.
+            int contentMin = scale(dip.DetailContentMinimumWidthDip);
+            int detailMin = (margin * 3) + contentMin + buttonWidth;
 
             return new ImagingManagerLayoutMetricsPx
             {
@@ -381,6 +395,7 @@ public partial class MainForm
                 SplitterWidth = dip.SplitterWidthPx,
                 DetailMargin = margin,
                 DetailGap = gap,
+                DetailButtonGap = buttonGap,
                 DetailButtonWidth = buttonWidth,
                 DetailButtonHeight = buttonHeight,
                 DetailStatusHeight = statusHeight,

@@ -3,20 +3,16 @@ using Shared.Shell.Theming;
 
 namespace Imaging.Manager;
 
-internal sealed class WimApplyProgressDialog : Form
+internal sealed class WimDeployProgressDialog : Form
 {
     private readonly ProgressBar _progress;
     private readonly Label _status;
     private readonly Button _cancel;
     private bool _allowClose;
 
-    public WimApplyProgressDialog(
-        ImagingPartitionInfo partition,
-        string targetRoot,
-        string imagePath,
-        WimImageInfo image)
+    public WimDeployProgressDialog(ImagingDiskInfo disk, string imagePath, WimImageInfo image)
     {
-        Text = "Apply WIM";
+        Text = "Deploy WIM";
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -24,14 +20,9 @@ internal sealed class WimApplyProgressDialog : Form
         ShowInTaskbar = false;
         ControlBox = false;
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(520, 204);
+        ClientSize = new Size(540, 224);
         BackColor = ShellTheme.WindowBack;
         ForeColor = ShellTheme.TextColor;
-
-        string targetAccess = targetRoot.TrimEnd('\\');
-        string targetName = partition.DriveLetters.Count > 0 && targetAccess.Length > 0
-            ? targetAccess
-            : $"Partition {partition.PartitionNumber}";
 
         string imageName = string.IsNullOrWhiteSpace(image.Name)
             ? $"Index {image.Index}"
@@ -41,35 +32,37 @@ internal sealed class WimApplyProgressDialog : Form
         {
             Left = 16,
             Top = 14,
-            Width = 488,
-            Height = 58,
+            Width = 508,
+            Height = 62,
             Font = new Font(Font, FontStyle.Bold),
-            Text = $"Applying {imageName} to {targetName}\n{Path.GetFileName(imagePath)}"
+            Text = $"Deploying {imageName} to Disk {disk.DiskNumber}\n{Path.GetFileName(imagePath)}"
         };
 
         _progress = new ProgressBar
         {
             Left = 16,
-            Top = 78,
-            Width = 488,
+            Top = 82,
+            Width = 508,
             Height = 24,
             Minimum = 0,
             Maximum = 100,
             Style = ProgressBarStyle.Marquee
         };
+
         _status = new Label
         {
             Left = 16,
-            Top = 112,
-            Width = 488,
-            Height = 28,
+            Top = 116,
+            Width = 508,
+            Height = 50,
             AutoEllipsis = true,
-            Text = "Starting DISM..."
+            Text = "Preparing deployment..."
         };
+
         _cancel = new Button
         {
-            Left = 420,
-            Top = 156,
+            Left = 440,
+            Top = 176,
             Width = 84,
             Height = 32,
             Text = "Cancel"
@@ -78,8 +71,8 @@ internal sealed class WimApplyProgressDialog : Form
         {
             if (MessageBox.Show(
                     this,
-                    "Cancel the WIM apply operation?\n\nThe target partition may be left with a partially applied image.",
-                    "Cancel Imaging Operation",
+                    "Cancel the WIM deployment?\n\nThe target disk may already have been erased and can be left unbootable or partially deployed.",
+                    "Cancel Deployment",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Warning,
                     MessageBoxDefaultButton.Button2) == DialogResult.Yes)
@@ -95,7 +88,7 @@ internal sealed class WimApplyProgressDialog : Form
 
     public event EventHandler? CancelRequested;
 
-    public void UpdateProgress(WimOperationProgress progress)
+    public void UpdateProgress(WimDeploymentProgress progress)
     {
         if (IsDisposed)
             return;
@@ -106,19 +99,13 @@ internal sealed class WimApplyProgressDialog : Form
                 _progress.Style = ProgressBarStyle.Continuous;
             _progress.Value = Math.Clamp(progress.Percentage.Value, 0, 100);
         }
+        else if (_progress.Value == 0 && _progress.Style != ProgressBarStyle.Marquee)
+        {
+            _progress.Style = ProgressBarStyle.Marquee;
+        }
 
         if (!string.IsNullOrWhiteSpace(progress.Message))
             _status.Text = progress.Message;
-    }
-
-    public void BeginBootConfiguration()
-    {
-        if (IsDisposed)
-            return;
-
-        _cancel.Enabled = false;
-        _status.Text = "Configuring boot files...";
-        _progress.Style = ProgressBarStyle.Marquee;
     }
 
     public void AllowClose() => _allowClose = true;

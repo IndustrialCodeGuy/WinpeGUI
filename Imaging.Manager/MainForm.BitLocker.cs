@@ -58,6 +58,7 @@ public partial class MainForm
         UpdateSelectedDiskPanel();
         _lblStatus.Text = "Unlock window opened.";
         _lblStatus.Visible = true;
+        LayoutDiskDetails(_rightPanel);
 
         try
         {

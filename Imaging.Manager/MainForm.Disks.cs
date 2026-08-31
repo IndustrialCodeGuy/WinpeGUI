@@ -84,7 +84,21 @@ public partial class MainForm
             Text = "Refresh",
             UseVisualStyleBackColor = true
         };
-        _btnRefresh.Click += (_, _) => LoadDisks(GetSelectedDisk()?.DiskNumber);
+        _btnRefresh.Click += async (_, _) => await RefreshViewAsync();
+
+        _btnMountWim = new Button
+        {
+            Text = "Mount WIM",
+            UseVisualStyleBackColor = true
+        };
+        _btnMountWim.Click += async (_, _) => await MountWimAsync();
+
+        _btnUnmountWim = new Button
+        {
+            Text = "Unmount WIM",
+            UseVisualStyleBackColor = true
+        };
+        _btnUnmountWim.Click += async (_, _) => await UnmountWimAsync();
 
         _btnCaptureWim = new Button
         {
@@ -107,6 +121,27 @@ public partial class MainForm
         };
         _btnUnlock.Click += async (_, _) => await UnlockSelectedPartitionAsync();
 
+        _btnDeployWim = new Button
+        {
+            Text = "Deploy WIM",
+            UseVisualStyleBackColor = true
+        };
+        _btnDeployWim.Click += async (_, _) => await DeployWimToSelectedDiskAsync();
+
+        _btnExportWim = new Button
+        {
+            Text = "Export WIM",
+            UseVisualStyleBackColor = true
+        };
+        _btnExportWim.Click += async (_, _) => await ExportWimAsync();
+
+        _btnAddDrivers = new Button
+        {
+            Text = "Add Drivers",
+            UseVisualStyleBackColor = true
+        };
+        _btnAddDrivers.Click += async (_, _) => await AddDriversAsync();
+
         _lblStatus = new Label
         {
             AutoSize = false,
@@ -121,9 +156,14 @@ public partial class MainForm
         _rightPanel.Controls.Add(_btnCapture);
         _rightPanel.Controls.Add(_btnApply);
         _rightPanel.Controls.Add(_btnRefresh);
+        _rightPanel.Controls.Add(_btnMountWim);
+        _rightPanel.Controls.Add(_btnUnmountWim);
         _rightPanel.Controls.Add(_btnCaptureWim);
         _rightPanel.Controls.Add(_btnApplyWim);
         _rightPanel.Controls.Add(_btnUnlock);
+        _rightPanel.Controls.Add(_btnDeployWim);
+        _rightPanel.Controls.Add(_btnExportWim);
+        _rightPanel.Controls.Add(_btnAddDrivers);
         _rightPanel.Controls.Add(_lblStatus);
         _rightPanel.Resize += (_, _) => LayoutDiskDetails(_rightPanel);
 
@@ -144,26 +184,64 @@ public partial class MainForm
 
         int margin = _mPx.DetailMargin;
         int gap = _mPx.DetailGap;
+        int buttonGap = _mPx.DetailButtonGap;
         int buttonWidth = _mPx.DetailButtonWidth;
         int buttonHeight = _mPx.DetailButtonHeight;
         int statusHeight = _mPx.DetailStatusHeight;
-        int contentWidth = Math.Max(0, panel.ClientSize.Width - (margin * 2));
-        int wimButtonTop = panel.ClientSize.Height - margin - buttonHeight;
-        int ffuButtonTop = wimButtonTop - margin - buttonHeight;
-        int statusTop = ffuButtonTop - gap - statusHeight;
 
-        SetBoundsIfChanged(_pnlPartitions, 0, 0, panel.ClientSize.Width, _mPx.PartitionPaneHeight);
+        // Keep the partition selector and information box in one aligned content
+        // column. The action column is fixed-width on the right.
+        int buttonLeft = Math.Max(margin, panel.ClientSize.Width - margin - buttonWidth);
+        // Use the same outer margin on both sides of the content column.
+        int contentWidth = Math.Max(0, buttonLeft - margin - margin);
+        int contentLeft = margin;
 
-        int detailsTop = _mPx.PartitionPaneHeight + margin;
-        int detailsHeight = Math.Max(0, statusTop - gap - detailsTop);
-        SetBoundsIfChanged(_txtDiskStatus, margin, detailsTop, contentWidth, detailsHeight);
-        SetBoundsIfChanged(_lblStatus, margin, statusTop, contentWidth, statusHeight);
-        SetBoundsIfChanged(_btnCapture, margin, ffuButtonTop, buttonWidth, buttonHeight);
-        SetBoundsIfChanged(_btnApply, margin + buttonWidth + gap, ffuButtonTop, buttonWidth, buttonHeight);
-        SetBoundsIfChanged(_btnRefresh, margin + ((buttonWidth + gap) * 2), ffuButtonTop, buttonWidth, buttonHeight);
-        SetBoundsIfChanged(_btnCaptureWim, margin, wimButtonTop, buttonWidth, buttonHeight);
-        SetBoundsIfChanged(_btnApplyWim, margin + buttonWidth + gap, wimButtonTop, buttonWidth, buttonHeight);
-        SetBoundsIfChanged(_btnUnlock, margin + ((buttonWidth + gap) * 2), wimButtonTop, buttonWidth, buttonHeight);
+        // Let the partition selector start at the top edge of the right pane.
+        // The aligned content column keeps its normal left/right margin while
+        // reclaiming the former top margin for the information box below.
+        int partitionTop = 0;
+        int detailsTop = _mPx.PartitionPaneHeight + gap;
+
+        // Normally let the information box run all the way to the standard
+        // bottom margin. When a status message is visible, reserve one normal
+        // gap for the status line instead of permanently giving that space up.
+        int contentBottom = Math.Max(detailsTop, panel.ClientSize.Height - margin);
+        int statusTop = contentBottom;
+        int detailsBottom = contentBottom;
+        if (_lblStatus.Visible)
+        {
+            statusTop = Math.Max(detailsTop, contentBottom - statusHeight);
+            detailsBottom = Math.Max(detailsTop, statusTop - gap);
+        }
+
+        int detailsHeight = Math.Max(0, detailsBottom - detailsTop);
+
+        SetBoundsIfChanged(_pnlPartitions, contentLeft, partitionTop, contentWidth, _mPx.PartitionPaneHeight);
+        SetBoundsIfChanged(_txtDiskStatus, contentLeft, detailsTop, contentWidth, detailsHeight);
+        SetBoundsIfChanged(_lblStatus, contentLeft, statusTop, contentWidth, statusHeight);
+
+        int buttonTop = margin;
+        SetBoundsIfChanged(_btnCapture, buttonLeft, buttonTop, buttonWidth, buttonHeight);
+        buttonTop += buttonHeight + buttonGap;
+        SetBoundsIfChanged(_btnApply, buttonLeft, buttonTop, buttonWidth, buttonHeight);
+        buttonTop += buttonHeight + buttonGap;
+        SetBoundsIfChanged(_btnMountWim, buttonLeft, buttonTop, buttonWidth, buttonHeight);
+        buttonTop += buttonHeight + buttonGap;
+        SetBoundsIfChanged(_btnUnmountWim, buttonLeft, buttonTop, buttonWidth, buttonHeight);
+        buttonTop += buttonHeight + buttonGap;
+        SetBoundsIfChanged(_btnCaptureWim, buttonLeft, buttonTop, buttonWidth, buttonHeight);
+        buttonTop += buttonHeight + buttonGap;
+        SetBoundsIfChanged(_btnApplyWim, buttonLeft, buttonTop, buttonWidth, buttonHeight);
+        buttonTop += buttonHeight + buttonGap;
+        SetBoundsIfChanged(_btnDeployWim, buttonLeft, buttonTop, buttonWidth, buttonHeight);
+        buttonTop += buttonHeight + buttonGap;
+        SetBoundsIfChanged(_btnExportWim, buttonLeft, buttonTop, buttonWidth, buttonHeight);
+        buttonTop += buttonHeight + buttonGap;
+        SetBoundsIfChanged(_btnAddDrivers, buttonLeft, buttonTop, buttonWidth, buttonHeight);
+        buttonTop += buttonHeight + buttonGap;
+        SetBoundsIfChanged(_btnUnlock, buttonLeft, buttonTop, buttonWidth, buttonHeight);
+        buttonTop += buttonHeight + buttonGap;
+        SetBoundsIfChanged(_btnRefresh, buttonLeft, buttonTop, buttonWidth, buttonHeight);
     }
 
     private void LoadDisks(int? selectDiskNumber = null)
@@ -793,9 +871,14 @@ public partial class MainForm
             _txtDiskStatus.Text = "No disk selected";
             _btnCapture.Enabled = false;
             _btnApply.Enabled = false;
+            _btnMountWim.Enabled = !_operationActive;
+            _btnUnmountWim.Enabled = !_operationActive && _mountedWims.Count > 0;
             _btnCaptureWim.Enabled = false;
             _btnApplyWim.Enabled = false;
+            _btnExportWim.Enabled = !_operationActive;
+            _btnAddDrivers.Enabled = !_operationActive && _mountedWims.Count > 0;
             _btnUnlock.Enabled = false;
+            _btnDeployWim.Enabled = false;
             _btnRefresh.Enabled = !_operationActive;
             UpdateStatusLine();
             return;
@@ -812,11 +895,16 @@ public partial class MainForm
 
         _btnCapture.Enabled = !_operationActive && diskSelectionActive;
         _btnApply.Enabled = !_operationActive && diskSelectionActive;
+        _btnMountWim.Enabled = !_operationActive;
+        _btnUnmountWim.Enabled = !_operationActive && _mountedWims.Count > 0;
         _btnCaptureWim.Enabled = !_operationActive && !diskSelectionActive;
         _btnApplyWim.Enabled = !_operationActive && !diskSelectionActive;
+        _btnExportWim.Enabled = !_operationActive;
+        _btnAddDrivers.Enabled = !_operationActive && _mountedWims.Count > 0;
         _btnUnlock.Enabled = !_operationActive &&
                              !diskSelectionActive &&
                              GetBitLockerVolumeForPartition(partition!)?.IsLocked == true;
+        _btnDeployWim.Enabled = !_operationActive && diskSelectionActive;
         _btnRefresh.Enabled = !_operationActive;
         UpdateStatusLine();
     }
@@ -832,6 +920,7 @@ public partial class MainForm
         text.AppendLine($"Device:     {disk.DevicePath}");
         text.AppendLine();
         text.AppendLine("FFU scope: Entire physical disk");
+        text.AppendLine("Deploy WIM: Clean/repartition entire physical disk");
         text.AppendLine();
         text.AppendLine("BitLocker / FFU capture");
         FfuCaptureAssessment assessment = FfuCaptureAssessment.Evaluate(disk);
@@ -906,22 +995,26 @@ public partial class MainForm
 
     private void UpdateStatusLine()
     {
+        bool wasVisible = _lblStatus.Visible;
+
         if (!string.IsNullOrWhiteSpace(_loadError))
         {
             _lblStatus.Text = _loadError;
             _lblStatus.Visible = true;
-            return;
         }
-
-        if (_disks.Count == 0)
+        else if (_disks.Count == 0)
         {
             _lblStatus.Text = "No physical disks found.";
             _lblStatus.Visible = true;
-            return;
+        }
+        else
+        {
+            _lblStatus.Text = string.Empty;
+            _lblStatus.Visible = false;
         }
 
-        _lblStatus.Text = string.Empty;
-        _lblStatus.Visible = false;
+        if (wasVisible != _lblStatus.Visible && _rightPanel is { IsDisposed: false })
+            LayoutDiskDetails(_rightPanel);
     }
 
     private static string FormatBytes(ulong bytes)

@@ -10,8 +10,10 @@ public partial class MainForm : Form
     private readonly DiskInventory _inventory = new();
     private readonly DismFfuBackend _ffuBackend = new();
     private readonly DismWimBackend _wimBackend = new();
+    private readonly WimDeploymentService _wimDeployment;
     private readonly WinReStagingService _winReStaging = new();
     private readonly TemporaryDriveLetterService _temporaryDriveLetters = new();
+    private readonly PartitionFormatService _partitionFormatter = new();
 
     private SplitContainer _splitMain = null!;
     private FlowLayoutPanel _pnlDisks = null!;
@@ -22,9 +24,14 @@ public partial class MainForm : Form
     private Button _btnCapture = null!;
     private Button _btnApply = null!;
     private Button _btnRefresh = null!;
+    private Button _btnMountWim = null!;
+    private Button _btnUnmountWim = null!;
     private Button _btnCaptureWim = null!;
     private Button _btnApplyWim = null!;
+    private Button _btnExportWim = null!;
+    private Button _btnAddDrivers = null!;
     private Button _btnUnlock = null!;
+    private Button _btnDeployWim = null!;
 
     private Panel? _selectedDiskTile;
     private Panel? _selectedPartitionTile;
@@ -33,6 +40,7 @@ public partial class MainForm : Form
     private readonly Dictionary<(DriveVisualKind Kind, int Size), Image> _partitionImagesByKind = new();
     private bool _isLoading;
     private bool _operationActive;
+    private IReadOnlyList<WimMountedImageInfo> _mountedWims = Array.Empty<WimMountedImageInfo>();
     private string _loadError = string.Empty;
 
     private readonly ImagingManagerLayoutMetrics _mDip = new();
@@ -45,6 +53,8 @@ public partial class MainForm : Form
 
     public MainForm()
     {
+        _wimDeployment = new WimDeploymentService(_wimBackend);
+
         AutoScaleMode = AutoScaleMode.None;
         AutoScaleDimensions = new SizeF(96f, 96f);
         Text = "Imaging Manager";
@@ -62,6 +72,7 @@ public partial class MainForm : Form
         InitializeDiskUi();
         ApplyMinimumSize();
         LoadDisks();
+        _ = RefreshMountedWimStateAsync();
     }
 
     protected override void OnShown(EventArgs e)
