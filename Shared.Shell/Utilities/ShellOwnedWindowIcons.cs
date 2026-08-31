@@ -9,6 +9,7 @@
         public const int TaskbarIconIndex = 249;
         public const int FileManagerIconIndex = 265;
         public const int BitLockerManagerIconIndex = 321;
+        public const int ImagingManagerIconIndex = 30;
         public const int BitLockerUnlockIconIndex = 225;
 
         public static Icon? CreateWindowIcon(int iconIndex, int size = 32)
@@ -48,6 +49,12 @@
             if (fileName.Equals("BitLocker.Manager.exe", StringComparison.OrdinalIgnoreCase))
             {
                 iconIndex = BitLockerManagerIconIndex;
+                return true;
+            }
+
+            if (fileName.Equals("Imaging.Manager.exe", StringComparison.OrdinalIgnoreCase))
+            {
+                iconIndex = ImagingManagerIconIndex;
                 return true;
             }
 
