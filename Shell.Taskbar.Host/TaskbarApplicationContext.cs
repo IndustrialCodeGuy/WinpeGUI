@@ -32,9 +32,11 @@ internal sealed class TaskbarApplicationContext : ApplicationContext
 
         BitLockerRuntimeCapabilities bitLockerCapabilities = BitLockerRuntimeCapabilities.Detect();
 
-        ShellTaskbarForm taskbar = new(bitLockerCapabilities.CanShowBitLockerManagerStartMenu);
+        bool showImagingManagerStartMenu = File.Exists(Path.Combine(AppContext.BaseDirectory, "Imaging.Manager.exe"));
+        ShellTaskbarForm taskbar = new(bitLockerCapabilities.CanShowBitLockerManagerStartMenu, showImagingManagerStartMenu);
         taskbar.OpenExplorerRequested += Taskbar_OpenExplorerRequested;
         taskbar.BitLockerManagerRequested += Taskbar_BitLockerManagerRequested;
+        taskbar.ImagingManagerRequested += Taskbar_ImagingManagerRequested;
         taskbar.ShutdownRequested += Taskbar_ShutdownRequested;
         taskbar.RebootRequested += Taskbar_RebootRequested;
         taskbar.FormClosed += Taskbar_FormClosed;
@@ -70,6 +72,12 @@ internal sealed class TaskbarApplicationContext : ApplicationContext
     {
         User32.AllowSetForegroundWindow(User32.ASFW_ANY);
         LaunchBitLockerManager();
+    }
+
+    private void Taskbar_ImagingManagerRequested(object? sender, EventArgs e)
+    {
+        User32.AllowSetForegroundWindow(User32.ASFW_ANY);
+        LaunchImagingManager();
     }
 
     private void Taskbar_ShutdownRequested(object? sender, EventArgs e)
@@ -219,6 +227,43 @@ internal sealed class TaskbarApplicationContext : ApplicationContext
         }
     }
 
+    private static void LaunchImagingManager()
+    {
+        string helperPath = Path.Combine(AppContext.BaseDirectory, "Imaging.Manager.exe");
+        if (!File.Exists(helperPath))
+        {
+            MessageBox.Show(
+                $"Imaging Manager was not found:\n{helperPath}",
+                "Imaging Manager",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            return;
+        }
+
+        ProcessStartInfo startInfo = new()
+        {
+            FileName = helperPath,
+            WorkingDirectory = AppContext.BaseDirectory,
+            UseShellExecute = true
+        };
+
+        if (ShellTheme.DarkMode)
+            startInfo.ArgumentList.Add("--dark");
+
+        try
+        {
+            Process.Start(startInfo)?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                $"Unable to start Imaging Manager:\n{ex.Message}",
+                "Imaging Manager",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+    }
+
     private static void RequestSystemPowerAction(bool reboot)
     {
         if (SystemPower.TryRequestSystemPowerAction(reboot, out string? error))
@@ -235,6 +280,7 @@ internal sealed class TaskbarApplicationContext : ApplicationContext
     {
         taskbar.OpenExplorerRequested -= Taskbar_OpenExplorerRequested;
         taskbar.BitLockerManagerRequested -= Taskbar_BitLockerManagerRequested;
+        taskbar.ImagingManagerRequested -= Taskbar_ImagingManagerRequested;
         taskbar.ShutdownRequested -= Taskbar_ShutdownRequested;
         taskbar.RebootRequested -= Taskbar_RebootRequested;
         taskbar.FormClosed -= Taskbar_FormClosed;
