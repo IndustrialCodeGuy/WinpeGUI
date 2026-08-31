@@ -96,6 +96,7 @@ namespace Shell.Taskbar.UI
         // ---------------- Check if running in WinPE ----------------
         private readonly bool _isWinPE;
         private readonly bool _showBitLockerManagerStartMenu;
+        private readonly bool _showImagingManagerStartMenu;
 
         // ---------------- Start button / menu state ----------------
         private KeyboardHook? _kbHook;
@@ -110,11 +111,12 @@ namespace Shell.Taskbar.UI
 
         public event EventHandler? OpenExplorerRequested;
         public event EventHandler? BitLockerManagerRequested;
+        public event EventHandler? ImagingManagerRequested;
         public event EventHandler? ShutdownRequested;
         public event EventHandler? RebootRequested;
         private Icon? _windowIcon;
 
-        public ShellTaskbarForm(bool showBitLockerManagerStartMenu = false)
+        public ShellTaskbarForm(bool showBitLockerManagerStartMenu = false, bool showImagingManagerStartMenu = false)
         {
             // The taskbar is manually scaled. Prevent WinForms from applying
             // an additional startup autoscale pass to child controls.
@@ -140,6 +142,7 @@ namespace Shell.Taskbar.UI
             // Check if running in WinPE
             _isWinPE = PlatformDetect.IsWinPE;
             _showBitLockerManagerStartMenu = showBitLockerManagerStartMenu;
+            _showImagingManagerStartMenu = showImagingManagerStartMenu;
 
             // Startup settings...
             _iconSizeSetting = IconSizeSetting.Small;
@@ -475,6 +478,11 @@ namespace Shell.Taskbar.UI
         private void OpenBitLockerManager()
         {
             BitLockerManagerRequested?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void OpenImagingManager()
+        {
+            ImagingManagerRequested?.Invoke(this, EventArgs.Empty);
         }
 
         private void RequestShutdown()
