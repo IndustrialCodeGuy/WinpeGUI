@@ -58,7 +58,7 @@ public partial class MainForm : Form
         AutoScaleMode = AutoScaleMode.None;
         AutoScaleDimensions = new SizeF(96f, 96f);
         Text = "Imaging Manager";
-        Icon = ShellOwnedWindowIcons.CreateWindowIcon(30) ?? Icon;
+        Icon = ShellOwnedWindowIcons.CreateWindowIcon(ShellOwnedWindowIcons.ImagingManagerIconIndex) ?? Icon;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = ShellTheme.WindowBack;
         ForeColor = ShellTheme.TextColor;
