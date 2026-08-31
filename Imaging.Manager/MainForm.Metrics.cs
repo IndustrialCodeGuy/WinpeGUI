@@ -15,6 +15,7 @@ public partial class MainForm
         ApplyScaledDpiWindowBounds(resizeState);
         ApplyLayoutMetrics();
         RefreshDiskImages();
+        RefreshPartitionImages();
     }
 
     private void RecalcMetrics()
@@ -58,21 +59,31 @@ public partial class MainForm
 
         Font = _chromeFont;
         if (_pnlDisks is not null) _pnlDisks.Font = _chromeFont;
+        if (_pnlPartitions is not null) _pnlPartitions.Font = _chromeFont;
         if (_rightPanel is not null) _rightPanel.Font = _chromeFont;
         if (_btnCapture is not null) _btnCapture.Font = _chromeFont;
         if (_btnApply is not null) _btnApply.Font = _chromeFont;
         if (_btnRefresh is not null) _btnRefresh.Font = _chromeFont;
+        if (_btnCaptureWim is not null) _btnCaptureWim.Font = _chromeFont;
+        if (_btnApplyWim is not null) _btnApplyWim.Font = _chromeFont;
+        if (_btnUnlock is not null) _btnUnlock.Font = _chromeFont;
         if (_lblStatus is not null) _lblStatus.Font = _chromeFont;
         if (_txtDiskStatus is not null) _txtDiskStatus.Font = _detailFont;
 
-        if (_pnlDisks is null)
+        ApplyChromeFontToChildren(_pnlDisks, _chromeFont);
+        ApplyChromeFontToChildren(_pnlPartitions, _chromeFont);
+    }
+
+    private static void ApplyChromeFontToChildren(Control? parent, Font font)
+    {
+        if (parent == null || parent.IsDisposed)
             return;
 
-        foreach (Control control in _pnlDisks.Controls)
+        foreach (Control control in parent.Controls)
         {
-            control.Font = _chromeFont;
+            control.Font = font;
             foreach (Control child in control.Controls)
-                child.Font = _chromeFont;
+                child.Font = font;
         }
     }
 
@@ -81,6 +92,7 @@ public partial class MainForm
         SuspendLayout();
         _splitMain?.SuspendLayout();
         _pnlDisks?.SuspendLayout();
+        _pnlPartitions?.SuspendLayout();
         try
         {
             ApplyMinimumSize();
@@ -104,9 +116,11 @@ public partial class MainForm
                 LayoutDiskDetails(_rightPanel);
 
             LayoutDiskTiles();
+            LayoutPartitionTiles();
         }
         finally
         {
+            _pnlPartitions?.ResumeLayout(true);
             _pnlDisks?.ResumeLayout(true);
             _splitMain?.ResumeLayout(true);
             ResumeLayout(true);
@@ -262,11 +276,14 @@ public partial class MainForm
 
     private sealed class ImagingManagerLayoutMetrics
     {
-        public int InitialClientWidthDip { get; init; } = 700;
-        public int InitialClientHeightDip { get; init; } = 430;
-        public int DiskPaneDefaultWidthDip { get; init; } = 160;
-        public int DiskPaneMinimumWidthDip { get; init; } = 140;
-        public int DiskPaneMaximumWidthDip { get; init; } = 210;
+        // Keep the top-level geometry aligned with BitLocker.Manager. The final
+        // width may be a few pixels wider than 610 DIP when the three-button
+        // detail minimum requires it, exactly as it is in BitLocker.Manager.
+        public int InitialClientWidthDip { get; init; } = 610;
+        public int InitialClientHeightDip { get; init; } = 370;
+        public int DiskPaneDefaultWidthDip { get; init; } = 128;
+        public int DiskPaneMinimumWidthDip { get; init; } = 112;
+        public int DiskPaneMaximumWidthDip { get; init; } = 180;
         public int DiskPaneScrollBarAllowanceDip { get; init; } = 17;
         public int DiskPaneBorderAllowanceDip { get; init; } = 4;
         public int SplitterWidthPx { get; init; } = 1;
@@ -275,6 +292,7 @@ public partial class MainForm
         public int DetailButtonWidthDip { get; init; } = 150;
         public int DetailButtonHeightDip { get; init; } = 30;
         public int DetailStatusHeightDip { get; init; } = 20;
+
         public int DiskTileHeightDip { get; init; } = 94;
         public int DiskTileIconTopDip { get; init; } = 8;
         public int DiskTileIconSizeDip { get; init; } = 32;
@@ -283,6 +301,21 @@ public partial class MainForm
         public int DiskTileSubTopDip { get; init; } = 63;
         public int DiskTileSubHeightDip { get; init; } = 24;
         public int DiskTilePadXDip { get; init; } = 6;
+
+        // Horizontal partition selector at the top of the selected disk pane.
+        // Height includes enough room for a horizontal scroll bar without
+        // forcing a vertical bar when many partitions are present.
+        public int PartitionPaneHeightDip { get; init; } = 94;
+        public int PartitionTileWidthDip { get; init; } = 112;
+        public int PartitionTileHeightDip { get; init; } = 72;
+        public int PartitionTileIconTopDip { get; init; } = 5;
+        public int PartitionTileIconSizeDip { get; init; } = 28;
+        public int PartitionTileNameTopDip { get; init; } = 36;
+        public int PartitionTileNameHeightDip { get; init; } = 18;
+        public int PartitionTileSubTopDip { get; init; } = 53;
+        public int PartitionTileSubHeightDip { get; init; } = 17;
+        public int PartitionTilePadXDip { get; init; } = 5;
+
         public float ChromeFontSizePt { get; init; } = 9f;
         public float DetailFontSizePt { get; init; } = 9f;
     }
@@ -311,6 +344,16 @@ public partial class MainForm
         public int DiskTileSubTop { get; init; }
         public int DiskTileSubHeight { get; init; }
         public int DiskTilePadX { get; init; }
+        public int PartitionPaneHeight { get; init; }
+        public int PartitionTileWidth { get; init; }
+        public int PartitionTileHeight { get; init; }
+        public int PartitionTileIconTop { get; init; }
+        public int PartitionTileIconSize { get; init; }
+        public int PartitionTileNameTop { get; init; }
+        public int PartitionTileNameHeight { get; init; }
+        public int PartitionTileSubTop { get; init; }
+        public int PartitionTileSubHeight { get; init; }
+        public int PartitionTilePadX { get; init; }
         public float ChromeFontSize { get; init; }
         public float DetailFontSize { get; init; }
 
@@ -350,6 +393,16 @@ public partial class MainForm
                 DiskTileSubTop = scale(dip.DiskTileSubTopDip),
                 DiskTileSubHeight = scale(dip.DiskTileSubHeightDip),
                 DiskTilePadX = scale(dip.DiskTilePadXDip),
+                PartitionPaneHeight = scale(dip.PartitionPaneHeightDip),
+                PartitionTileWidth = scale(dip.PartitionTileWidthDip),
+                PartitionTileHeight = scale(dip.PartitionTileHeightDip),
+                PartitionTileIconTop = scale(dip.PartitionTileIconTopDip),
+                PartitionTileIconSize = scale(dip.PartitionTileIconSizeDip),
+                PartitionTileNameTop = scale(dip.PartitionTileNameTopDip),
+                PartitionTileNameHeight = scale(dip.PartitionTileNameHeightDip),
+                PartitionTileSubTop = scale(dip.PartitionTileSubTopDip),
+                PartitionTileSubHeight = scale(dip.PartitionTileSubHeightDip),
+                PartitionTilePadX = scale(dip.PartitionTilePadXDip),
                 ChromeFontSize = scaleFont(dip.ChromeFontSizePt),
                 DetailFontSize = scaleFont(dip.DetailFontSizePt)
             };

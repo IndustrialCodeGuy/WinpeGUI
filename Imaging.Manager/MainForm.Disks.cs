@@ -1,4 +1,6 @@
+using BitLocker.Core;
 using Imaging.Core;
+using Shared.Shell.Models;
 using Shared.Shell.Theming;
 using Shared.Shell.Utilities;
 using System.Text;
@@ -38,12 +40,26 @@ public partial class MainForm
             BackColor = ShellTheme.WindowBack
         };
 
+        _pnlPartitions = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            AutoScroll = true,
+            Padding = new Padding(0),
+            BackColor = ShellTheme.ContentBack,
+            BorderStyle = BorderStyle.FixedSingle
+        };
+        _pnlPartitions.Resize += (_, _) => LayoutPartitionTiles();
+
         _txtDiskStatus = new Label
         {
             AutoSize = false,
             BorderStyle = BorderStyle.FixedSingle,
             BackColor = ShellTheme.ContentBack,
-            ForeColor = ShellTheme.TextColor,
+            // In full Windows SystemColors.WindowText is normally black, but
+            // some WinPE light themes expose a muted value. Keep this body text
+            // dark in light mode while retaining the shared dark-mode color.
+            ForeColor = GetInformationTextColor(),
             TextAlign = ContentAlignment.TopLeft,
             UseMnemonic = false,
             Text = "No disk selected"
@@ -70,18 +86,44 @@ public partial class MainForm
         };
         _btnRefresh.Click += (_, _) => LoadDisks(GetSelectedDisk()?.DiskNumber);
 
+        _btnCaptureWim = new Button
+        {
+            Text = "Capture WIM",
+            UseVisualStyleBackColor = true
+        };
+        _btnCaptureWim.Click += async (_, _) => await CaptureSelectedPartitionWimAsync();
+
+        _btnApplyWim = new Button
+        {
+            Text = "Apply WIM",
+            UseVisualStyleBackColor = true
+        };
+        _btnApplyWim.Click += async (_, _) => await ApplyWimToSelectedPartitionAsync();
+
+        _btnUnlock = new Button
+        {
+            Text = "Unlock",
+            UseVisualStyleBackColor = true
+        };
+        _btnUnlock.Click += async (_, _) => await UnlockSelectedPartitionAsync();
+
         _lblStatus = new Label
         {
             AutoSize = false,
             AutoEllipsis = true,
+            ForeColor = GetInformationTextColor(),
             TextAlign = ContentAlignment.MiddleLeft,
             Visible = false
         };
 
+        _rightPanel.Controls.Add(_pnlPartitions);
         _rightPanel.Controls.Add(_txtDiskStatus);
         _rightPanel.Controls.Add(_btnCapture);
         _rightPanel.Controls.Add(_btnApply);
         _rightPanel.Controls.Add(_btnRefresh);
+        _rightPanel.Controls.Add(_btnCaptureWim);
+        _rightPanel.Controls.Add(_btnApplyWim);
+        _rightPanel.Controls.Add(_btnUnlock);
         _rightPanel.Controls.Add(_lblStatus);
         _rightPanel.Resize += (_, _) => LayoutDiskDetails(_rightPanel);
 
@@ -91,6 +133,9 @@ public partial class MainForm
         ApplyChromeFonts();
         LayoutDiskDetails(_rightPanel);
     }
+
+    private static Color GetInformationTextColor() =>
+        ShellTheme.DarkMode ? ShellTheme.TextColor : Color.Black;
 
     private void LayoutDiskDetails(Control panel)
     {
@@ -103,21 +148,30 @@ public partial class MainForm
         int buttonHeight = _mPx.DetailButtonHeight;
         int statusHeight = _mPx.DetailStatusHeight;
         int contentWidth = Math.Max(0, panel.ClientSize.Width - (margin * 2));
-        int buttonTop = panel.ClientSize.Height - margin - buttonHeight;
-        int statusTop = buttonTop - gap - statusHeight;
-        int detailsHeight = Math.Max(0, statusTop - gap - margin);
+        int wimButtonTop = panel.ClientSize.Height - margin - buttonHeight;
+        int ffuButtonTop = wimButtonTop - margin - buttonHeight;
+        int statusTop = ffuButtonTop - gap - statusHeight;
 
-        SetBoundsIfChanged(_txtDiskStatus, margin, margin, contentWidth, detailsHeight);
+        SetBoundsIfChanged(_pnlPartitions, 0, 0, panel.ClientSize.Width, _mPx.PartitionPaneHeight);
+
+        int detailsTop = _mPx.PartitionPaneHeight + margin;
+        int detailsHeight = Math.Max(0, statusTop - gap - detailsTop);
+        SetBoundsIfChanged(_txtDiskStatus, margin, detailsTop, contentWidth, detailsHeight);
         SetBoundsIfChanged(_lblStatus, margin, statusTop, contentWidth, statusHeight);
-        SetBoundsIfChanged(_btnCapture, margin, buttonTop, buttonWidth, buttonHeight);
-        SetBoundsIfChanged(_btnApply, margin + buttonWidth + gap, buttonTop, buttonWidth, buttonHeight);
-        SetBoundsIfChanged(_btnRefresh, margin + ((buttonWidth + gap) * 2), buttonTop, buttonWidth, buttonHeight);
+        SetBoundsIfChanged(_btnCapture, margin, ffuButtonTop, buttonWidth, buttonHeight);
+        SetBoundsIfChanged(_btnApply, margin + buttonWidth + gap, ffuButtonTop, buttonWidth, buttonHeight);
+        SetBoundsIfChanged(_btnRefresh, margin + ((buttonWidth + gap) * 2), ffuButtonTop, buttonWidth, buttonHeight);
+        SetBoundsIfChanged(_btnCaptureWim, margin, wimButtonTop, buttonWidth, buttonHeight);
+        SetBoundsIfChanged(_btnApplyWim, margin + buttonWidth + gap, wimButtonTop, buttonWidth, buttonHeight);
+        SetBoundsIfChanged(_btnUnlock, margin + ((buttonWidth + gap) * 2), wimButtonTop, buttonWidth, buttonHeight);
     }
 
     private void LoadDisks(int? selectDiskNumber = null)
     {
         if (_isLoading || _operationActive)
             return;
+
+        int? selectedPartitionNumber = GetSelectedPartition()?.PartitionNumber;
 
         _isLoading = true;
         UseWaitCursor = true;
@@ -137,18 +191,25 @@ public partial class MainForm
             UseWaitCursor = false;
         }
 
-        RebuildDiskTiles(selectDiskNumber);
+        RebuildDiskTiles(selectDiskNumber, selectedPartitionNumber);
         ApplyLayoutMetrics();
         UpdateSelectedDiskPanel();
     }
 
-    private void RebuildDiskTiles(int? selectDiskNumber)
+    private void RebuildDiskTiles(int? selectDiskNumber, int? preferredPartitionNumber)
     {
         _pnlDisks.SuspendLayout();
         try
         {
-            _pnlDisks.Controls.Clear();
+            while (_pnlDisks.Controls.Count > 0)
+            {
+                Control control = _pnlDisks.Controls[0];
+                _pnlDisks.Controls.RemoveAt(0);
+                control.Dispose();
+            }
+
             _selectedDiskTile = null;
+            ClearPartitionTiles();
 
             foreach (ImagingDiskInfo disk in _disks)
             {
@@ -156,7 +217,7 @@ public partial class MainForm
                 _pnlDisks.Controls.Add(tile);
 
                 if (selectDiskNumber == disk.DiskNumber)
-                    SelectDiskTile(tile);
+                    SelectDiskTile(tile, preferredPartitionNumber);
             }
 
             if (_selectedDiskTile == null && _pnlDisks.Controls.OfType<Panel>().FirstOrDefault() is Panel first)
@@ -178,6 +239,7 @@ public partial class MainForm
             Padding = new Padding(0),
             BorderStyle = BorderStyle.None,
             BackColor = ShellTheme.ContentBack,
+            ForeColor = ShellTheme.TextColor,
             Cursor = Cursors.Hand,
             Tag = disk
         };
@@ -192,6 +254,7 @@ public partial class MainForm
         Label name = new()
         {
             Text = $"Disk {disk.DiskNumber}",
+            ForeColor = ShellTheme.TextColor,
             TextAlign = ContentAlignment.TopCenter,
             AutoEllipsis = true,
             UseMnemonic = false,
@@ -201,6 +264,7 @@ public partial class MainForm
         Label sub = new()
         {
             Text = FormatBytes(disk.SizeBytes),
+            ForeColor = ShellTheme.TextColor,
             TextAlign = ContentAlignment.TopCenter,
             AutoEllipsis = true,
             UseMnemonic = false,
@@ -271,7 +335,7 @@ public partial class MainForm
 
     private int GetDiskTileWidth()
     {
-        int width = _pnlDisks.ClientSize.Width;
+        int width = _pnlDisks.ClientSize.Width - _pnlDisks.Padding.Left - _pnlDisks.Padding.Right;
         if (_pnlDisks.VerticalScroll.Visible)
             width -= SystemInformation.VerticalScrollBarWidth;
         return Math.Max(_mPx.DiskPaneMinimumWidth - _mPx.DiskPaneBorderAllowance, width);
@@ -281,11 +345,26 @@ public partial class MainForm
     {
         int desired = _mPx.LeftPanelWidth;
         Font font = _chromeFont ?? Font;
+
         foreach (ImagingDiskInfo disk in _disks)
         {
-            string text = $"Disk {disk.DiskNumber}  {FormatBytes(disk.SizeBytes)}";
-            int measured = TextRenderer.MeasureText(text, font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
-            desired = Math.Max(desired, measured + (_mPx.DiskTilePadX * 2) + _mPx.DiskPaneBorderAllowance);
+            // The tile renders these on separate lines. Measuring the old
+            // combined "Disk N  size" string made this pane wider than the
+            // equivalent BitLocker selector for no visual benefit.
+            int nameWidth = TextRenderer.MeasureText(
+                $"Disk {disk.DiskNumber}",
+                font,
+                new Size(int.MaxValue, int.MaxValue),
+                TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+            int sizeWidth = TextRenderer.MeasureText(
+                FormatBytes(disk.SizeBytes),
+                font,
+                new Size(int.MaxValue, int.MaxValue),
+                TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+
+            desired = Math.Max(
+                desired,
+                Math.Max(nameWidth, sizeWidth) + (_mPx.DiskTilePadX * 2) + _mPx.DiskPaneBorderAllowance);
         }
 
         if (_pnlDisks is { IsDisposed: false } && _disks.Count * _mPx.DiskTileHeight > _pnlDisks.ClientSize.Height)
@@ -321,20 +400,390 @@ public partial class MainForm
             picture.Image = GetDiskImage();
     }
 
-    private void SelectDiskTile(Panel tile)
+    private void SelectDiskTile(Panel tile, int? preferredPartitionNumber = null)
     {
         if (_selectedDiskTile == tile)
+        {
+            if (preferredPartitionNumber.HasValue)
+                SelectPartitionByNumber(preferredPartitionNumber.Value);
+            else if (_selectedPartitionTile != null)
+                ClearPartitionSelection();
             return;
+        }
 
         if (_selectedDiskTile != null)
             _selectedDiskTile.BackColor = ShellTheme.ContentBack;
 
         _selectedDiskTile = tile;
         tile.BackColor = ShellTheme.ItemSelectedBack;
+
+        RebuildPartitionTiles(tile.Tag as ImagingDiskInfo, preferredPartitionNumber);
+        UpdateDiskSelectionVisual();
         UpdateSelectedDiskPanel();
     }
 
     private ImagingDiskInfo? GetSelectedDisk() => _selectedDiskTile?.Tag as ImagingDiskInfo;
+
+    // Partition selector
+
+    private void RebuildPartitionTiles(ImagingDiskInfo? disk, int? preferredPartitionNumber = null)
+    {
+        ClearPartitionTiles();
+        if (disk == null)
+            return;
+
+        _pnlPartitions.SuspendLayout();
+        try
+        {
+            foreach (ImagingPartitionInfo partition in disk.Partitions)
+            {
+                Panel tile = CreatePartitionTile(partition);
+                _pnlPartitions.Controls.Add(tile);
+
+                if (preferredPartitionNumber == partition.PartitionNumber)
+                    SelectPartitionTile(tile);
+            }
+
+        }
+        finally
+        {
+            _pnlPartitions.ResumeLayout(true);
+        }
+
+        LayoutPartitionTiles();
+    }
+
+    private void ClearPartitionTiles()
+    {
+        _selectedPartitionTile = null;
+        if (_pnlPartitions == null || _pnlPartitions.IsDisposed)
+            return;
+
+        while (_pnlPartitions.Controls.Count > 0)
+        {
+            Control control = _pnlPartitions.Controls[0];
+            _pnlPartitions.Controls.RemoveAt(0);
+            control.Dispose();
+        }
+    }
+
+    private Panel CreatePartitionTile(ImagingPartitionInfo partition)
+    {
+        Panel tile = new()
+        {
+            Width = _mPx.PartitionTileWidth,
+            Height = _mPx.PartitionTileHeight,
+            Margin = new Padding(0),
+            Padding = new Padding(0),
+            BorderStyle = BorderStyle.None,
+            BackColor = ShellTheme.ContentBack,
+            ForeColor = ShellTheme.TextColor,
+            Cursor = Cursors.Hand,
+            Tag = partition
+        };
+
+        PictureBox picture = new()
+        {
+            SizeMode = PictureBoxSizeMode.CenterImage,
+            Image = GetPartitionImage(partition),
+            Cursor = Cursors.Hand
+        };
+
+        Label name = new()
+        {
+            Text = GetPartitionDisplayName(partition),
+            ForeColor = ShellTheme.TextColor,
+            TextAlign = ContentAlignment.TopCenter,
+            AutoEllipsis = true,
+            UseMnemonic = false,
+            Cursor = Cursors.Hand
+        };
+
+        Label sub = new()
+        {
+            Text = FormatBytes(partition.SizeBytes),
+            ForeColor = ShellTheme.TextColor,
+            TextAlign = ContentAlignment.TopCenter,
+            AutoEllipsis = true,
+            UseMnemonic = false,
+            Cursor = Cursors.Hand
+        };
+
+        void select(object? _, EventArgs __) => SelectPartitionTile(tile);
+        tile.Click += select;
+        picture.Click += select;
+        name.Click += select;
+        sub.Click += select;
+
+        void hover(object? _, EventArgs __)
+        {
+            if (_selectedPartitionTile != tile)
+                tile.BackColor = ShellTheme.ItemHoverBack;
+        }
+
+        void leave(object? _, EventArgs __)
+        {
+            if (tile.ClientRectangle.Contains(tile.PointToClient(Cursor.Position)))
+                return;
+            if (_selectedPartitionTile != tile)
+                tile.BackColor = ShellTheme.ContentBack;
+        }
+
+        tile.MouseEnter += hover;
+        picture.MouseEnter += hover;
+        name.MouseEnter += hover;
+        sub.MouseEnter += hover;
+        tile.MouseLeave += leave;
+        picture.MouseLeave += leave;
+        name.MouseLeave += leave;
+        sub.MouseLeave += leave;
+
+        tile.Controls.Add(picture);
+        tile.Controls.Add(name);
+        tile.Controls.Add(sub);
+        LayoutPartitionTile(tile);
+        return tile;
+    }
+
+    private void LayoutPartitionTiles()
+    {
+        if (_pnlPartitions == null || _pnlPartitions.IsDisposed)
+            return;
+
+        int tileHeight = Math.Max(_mPx.PartitionTileHeight, _pnlPartitions.ClientSize.Height);
+        if (_pnlPartitions.HorizontalScroll.Visible)
+            tileHeight = Math.Max(_mPx.PartitionTileHeight, tileHeight - SystemInformation.HorizontalScrollBarHeight);
+
+        foreach (Panel tile in _pnlPartitions.Controls.OfType<Panel>())
+        {
+            tile.Width = _mPx.PartitionTileWidth;
+            tile.Height = tileHeight;
+            LayoutPartitionTile(tile);
+        }
+    }
+
+    private void LayoutPartitionTile(Panel tile)
+    {
+        PictureBox? picture = tile.Controls.OfType<PictureBox>().FirstOrDefault();
+        Label[] labels = tile.Controls.OfType<Label>().ToArray();
+
+        if (picture != null)
+            SetBoundsIfChanged(
+                picture,
+                (tile.Width - _mPx.PartitionTileIconSize) / 2,
+                _mPx.PartitionTileIconTop,
+                _mPx.PartitionTileIconSize,
+                _mPx.PartitionTileIconSize);
+
+        if (labels.Length > 0)
+            SetBoundsIfChanged(
+                labels[0],
+                _mPx.PartitionTilePadX,
+                _mPx.PartitionTileNameTop,
+                Math.Max(0, tile.Width - (_mPx.PartitionTilePadX * 2)),
+                _mPx.PartitionTileNameHeight);
+
+        if (labels.Length > 1)
+            SetBoundsIfChanged(
+                labels[1],
+                _mPx.PartitionTilePadX,
+                _mPx.PartitionTileSubTop,
+                Math.Max(0, tile.Width - (_mPx.PartitionTilePadX * 2)),
+                _mPx.PartitionTileSubHeight);
+    }
+
+    private Image GetPartitionImage(ImagingPartitionInfo partition)
+    {
+        int size = _mPx.PartitionTileIconSize;
+        DriveVisualKind kind = GetPartitionVisualKind(partition);
+        var key = (kind, size);
+        if (_partitionImagesByKind.TryGetValue(key, out Image? image))
+            return image;
+
+        string imageresPath = Path.Combine(Environment.SystemDirectory, "imageres.dll");
+        int iconIndex = DriveIconMap.GetImageresIconIndex(kind);
+        image = IconUtil.FromFileIconIndex(imageresPath, iconIndex, size);
+        if (image == null)
+        {
+            if (kind != DriveVisualKind.Fixed)
+            {
+                image = GetPartitionImageForKind(DriveVisualKind.Fixed, size);
+            }
+            else
+            {
+                using Bitmap fallback = SystemIcons.WinLogo.ToBitmap();
+                image = new Bitmap(fallback, new Size(size, size));
+            }
+        }
+
+        _partitionImagesByKind[key] = image;
+        return image;
+    }
+
+    private Image GetPartitionImageForKind(DriveVisualKind kind, int size)
+    {
+        var key = (kind, size);
+        if (_partitionImagesByKind.TryGetValue(key, out Image? image))
+            return image;
+
+        string imageresPath = Path.Combine(Environment.SystemDirectory, "imageres.dll");
+        int iconIndex = DriveIconMap.GetImageresIconIndex(kind);
+        image = IconUtil.FromFileIconIndex(imageresPath, iconIndex, size);
+        if (image == null)
+        {
+            using Bitmap fallback = SystemIcons.WinLogo.ToBitmap();
+            image = new Bitmap(fallback, new Size(size, size));
+        }
+
+        _partitionImagesByKind[key] = image;
+        return image;
+    }
+
+    private DriveVisualKind GetPartitionVisualKind(ImagingPartitionInfo partition)
+    {
+        ImagingBitLockerVolumeInfo? volume = GetBitLockerVolumeForPartition(partition);
+        if (volume != null)
+        {
+            bool isSystemVolume = IsSystemVisualPartition(partition, volume);
+            return volume.VisualState switch
+            {
+                BitLockerVisualState.Locked => DriveVisualKind.BitLockerLocked,
+                BitLockerVisualState.Unknown => DriveVisualKind.BitLockerStatusUnknown,
+                BitLockerVisualState.ProtectionOff => isSystemVolume
+                    ? DriveVisualKind.SystemBitLockerProtectionOff
+                    : DriveVisualKind.BitLockerProtectionOff,
+                BitLockerVisualState.Unlocked => isSystemVolume
+                    ? DriveVisualKind.SystemBitLockerUnlocked
+                    : DriveVisualKind.BitLockerUnlocked,
+                _ => GetPlainPartitionVisualKind(partition, isSystemVolume)
+            };
+        }
+
+        return GetPlainPartitionVisualKind(partition, IsSystemVisualPartition(partition, null));
+    }
+
+    private static DriveVisualKind GetPlainPartitionVisualKind(ImagingPartitionInfo partition, bool isSystemVolume)
+    {
+        foreach (string mountPoint in partition.DriveLetters)
+        {
+            try
+            {
+                DriveType driveType = new DriveInfo(mountPoint).DriveType;
+                if (driveType == DriveType.CDRom)
+                    return DriveVisualKind.Optical;
+                if (driveType == DriveType.Network)
+                    return DriveVisualKind.Network;
+                if (driveType == DriveType.Removable)
+                    return DriveVisualKind.Removable;
+            }
+            catch
+            {
+            }
+        }
+
+        return isSystemVolume ? DriveVisualKind.System : DriveVisualKind.Fixed;
+    }
+
+    private static bool IsSystemVisualPartition(ImagingPartitionInfo partition, ImagingBitLockerVolumeInfo? volume)
+    {
+        foreach (string mountPoint in partition.DriveLetters)
+        {
+            if (DriveSystemDetector.IsSystemVisualDrive(mountPoint))
+                return true;
+        }
+
+        return volume?.IsSystemVolume == true &&
+               !partition.DriveLetters.Any(static mountPoint => DriveSystemDetector.IsRunningSystemDrive(mountPoint));
+    }
+
+    private void RefreshPartitionImages()
+    {
+        if (_pnlPartitions == null || _pnlPartitions.IsDisposed)
+            return;
+
+        foreach (Panel tile in _pnlPartitions.Controls.OfType<Panel>())
+        {
+            if (tile.Tag is not ImagingPartitionInfo partition)
+                continue;
+
+            PictureBox? picture = tile.Controls.OfType<PictureBox>().FirstOrDefault();
+            if (picture != null)
+                picture.Image = GetPartitionImage(partition);
+        }
+    }
+
+    private void SelectPartitionTile(Panel tile)
+    {
+        if (_selectedPartitionTile == tile)
+            return;
+
+        if (_selectedPartitionTile != null)
+            _selectedPartitionTile.BackColor = ShellTheme.ContentBack;
+
+        _selectedPartitionTile = tile;
+        tile.BackColor = ShellTheme.ItemSelectedBack;
+        UpdateDiskSelectionVisual();
+        UpdateSelectedDiskPanel();
+    }
+
+    private void ClearPartitionSelection()
+    {
+        if (_selectedPartitionTile != null)
+            _selectedPartitionTile.BackColor = ShellTheme.ContentBack;
+
+        _selectedPartitionTile = null;
+        UpdateDiskSelectionVisual();
+        UpdateSelectedDiskPanel();
+    }
+
+    private void UpdateDiskSelectionVisual()
+    {
+        if (_selectedDiskTile == null)
+            return;
+
+        // Keep the physical disk visibly selected as the parent context, but
+        // mute it while a child partition owns the active selection. The
+        // shared hover shade provides the same selected-family color at a
+        // visibly inactive intensity in both shell themes.
+        _selectedDiskTile.BackColor = _selectedPartitionTile == null
+            ? ShellTheme.ItemSelectedBack
+            : ShellTheme.ItemHoverBack;
+    }
+
+    private void SelectPartitionByNumber(int partitionNumber)
+    {
+        Panel? tile = _pnlPartitions.Controls
+            .OfType<Panel>()
+            .FirstOrDefault(t => t.Tag is ImagingPartitionInfo p && p.PartitionNumber == partitionNumber);
+        if (tile != null)
+            SelectPartitionTile(tile);
+    }
+
+    private ImagingPartitionInfo? GetSelectedPartition() => _selectedPartitionTile?.Tag as ImagingPartitionInfo;
+
+    private static bool TryGetPartitionCaptureRoot(ImagingPartitionInfo partition, out string root)
+    {
+        foreach (string drive in partition.DriveLetters)
+        {
+            string normalized = ImagingPath.NormalizeDriveRoot(drive);
+            if (normalized.Length > 0 && Directory.Exists(normalized))
+            {
+                root = normalized;
+                return true;
+            }
+        }
+
+        root = string.Empty;
+        return false;
+    }
+
+    private static string GetPartitionDisplayName(ImagingPartitionInfo partition)
+    {
+        if (partition.DriveLetters.Count > 0)
+            return string.Join(", ", partition.DriveLetters.Select(static d => d.TrimEnd('\\')));
+
+        return $"Partition {partition.PartitionNumber}";
+    }
 
     private void UpdateSelectedDiskPanel()
     {
@@ -344,13 +793,30 @@ public partial class MainForm
             _txtDiskStatus.Text = "No disk selected";
             _btnCapture.Enabled = false;
             _btnApply.Enabled = false;
+            _btnCaptureWim.Enabled = false;
+            _btnApplyWim.Enabled = false;
+            _btnUnlock.Enabled = false;
+            _btnRefresh.Enabled = !_operationActive;
             UpdateStatusLine();
             return;
         }
 
-        _txtDiskStatus.Text = BuildDiskDetails(disk);
-        _btnCapture.Enabled = !_operationActive;
-        _btnApply.Enabled = !_operationActive;
+        _txtDiskStatus.ForeColor = GetInformationTextColor();
+        _lblStatus.ForeColor = GetInformationTextColor();
+
+        ImagingPartitionInfo? partition = GetSelectedPartition();
+        bool diskSelectionActive = partition == null;
+        _txtDiskStatus.Text = diskSelectionActive
+            ? BuildDiskDetails(disk)
+            : BuildPartitionDetails(partition!);
+
+        _btnCapture.Enabled = !_operationActive && diskSelectionActive;
+        _btnApply.Enabled = !_operationActive && diskSelectionActive;
+        _btnCaptureWim.Enabled = !_operationActive && !diskSelectionActive;
+        _btnApplyWim.Enabled = !_operationActive && !diskSelectionActive;
+        _btnUnlock.Enabled = !_operationActive &&
+                             !diskSelectionActive &&
+                             GetBitLockerVolumeForPartition(partition!)?.IsLocked == true;
         _btnRefresh.Enabled = !_operationActive;
         UpdateStatusLine();
     }
@@ -365,23 +831,7 @@ public partial class MainForm
         if (!string.IsNullOrWhiteSpace(disk.SerialNumber)) text.AppendLine($"Serial:     {disk.SerialNumber}");
         text.AppendLine($"Device:     {disk.DevicePath}");
         text.AppendLine();
-        text.AppendLine("Partitions");
-
-        if (disk.Partitions.Count == 0)
-        {
-            text.AppendLine("  None detected");
-        }
-        else
-        {
-            foreach (ImagingPartitionInfo partition in disk.Partitions)
-            {
-                string drives = partition.DriveLetters.Count == 0
-                    ? string.Empty
-                    : "  " + string.Join(", ", partition.DriveLetters.Select(static d => d.TrimEnd('\\')));
-                text.AppendLine($"  #{partition.PartitionNumber}  {FormatBytes(partition.SizeBytes),10}{drives}");
-            }
-        }
-
+        text.AppendLine("FFU scope: Entire physical disk");
         text.AppendLine();
         text.AppendLine("BitLocker / FFU capture");
         FfuCaptureAssessment assessment = FfuCaptureAssessment.Evaluate(disk);
@@ -411,6 +861,44 @@ public partial class MainForm
             text.AppendLine(assessment.RequiresEncryptionWarning
                 ? "  FFU capture readiness: Decrypt first (recommended)"
                 : "  FFU capture readiness: Ready");
+        }
+
+        return text.ToString().TrimEnd();
+    }
+
+    private string BuildPartitionDetails(ImagingPartitionInfo partition)
+    {
+        StringBuilder text = new();
+        text.AppendLine($"Partition {partition.PartitionNumber}");
+
+        string drives = partition.DriveLetters.Count == 0
+            ? "None"
+            : string.Join(", ", partition.DriveLetters.Select(static d => d.TrimEnd('\\')));
+        text.AppendLine($"Drive:      {drives}");
+        text.AppendLine($"Size:       {FormatBytes(partition.SizeBytes)}");
+        if (!string.IsNullOrWhiteSpace(partition.Type))
+            text.AppendLine($"Type:       {partition.Type}");
+        text.AppendLine($"Primary:    {(partition.PrimaryPartition ? "Yes" : "No")}");
+        text.AppendLine($"Boot:       {(partition.BootPartition ? "Yes" : "No")}");
+        if (!string.IsNullOrWhiteSpace(partition.DeviceId))
+            text.AppendLine($"Device:     {partition.DeviceId}");
+
+        ImagingBitLockerVolumeInfo? bitLocker = GetBitLockerVolumeForPartition(partition);
+        if (bitLocker?.IsBitLockerCapable == true)
+        {
+            text.AppendLine();
+            text.AppendLine("BitLocker");
+            string state = bitLocker.IsLocked switch
+            {
+                true => "Locked",
+                false => bitLocker.VisualState == BitLockerVisualState.ProtectionOff ? "Unlocked · Protection off" : "Unlocked",
+                _ => "Status unknown"
+            };
+            text.AppendLine($"Status:     {state}");
+            if (bitLocker.EncryptionPercentage.HasValue)
+                text.AppendLine($"Encrypted:  {bitLocker.EncryptionPercentage.Value}%");
+            if (!string.IsNullOrWhiteSpace(bitLocker.ConversionStatus))
+                text.AppendLine($"Conversion: {bitLocker.ConversionStatus}");
         }
 
         return text.ToString().TrimEnd();
