@@ -28,6 +28,8 @@ public partial class MainForm : Form
     private Button _btnRefresh = null!;
     private Button _btnMountWim = null!;
     private Button _btnUnmountWim = null!;
+    private Button _btnRemountWim = null!;
+    private Button _btnCleanupMounts = null!;
     private Button _btnCaptureWim = null!;
     private Button _btnApplyWim = null!;
     private Button _btnExportWim = null!;
@@ -45,6 +47,7 @@ public partial class MainForm : Form
     private bool _isLoading;
     private bool _operationActive;
     private IReadOnlyList<WimMountedImageInfo> _mountedWims = Array.Empty<WimMountedImageInfo>();
+    private readonly Dictionary<string, PendingWimUnmountState> _pendingWimUnmounts = new(StringComparer.OrdinalIgnoreCase);
     private string _loadError = string.Empty;
 
     private readonly ImagingManagerLayoutMetrics _mDip = new();
@@ -75,6 +78,7 @@ public partial class MainForm : Form
 
         InitializeDiskUi();
         ApplyMinimumSize();
+        LoadPendingWimUnmountState();
         LoadDisks();
         _ = RefreshMountedWimStateAsync();
     }

@@ -68,6 +68,8 @@ public partial class MainForm
         if (_btnRefresh is not null) _btnRefresh.Font = _chromeFont;
         if (_btnMountWim is not null) _btnMountWim.Font = _chromeFont;
         if (_btnUnmountWim is not null) _btnUnmountWim.Font = _chromeFont;
+        if (_btnRemountWim is not null) _btnRemountWim.Font = _chromeFont;
+        if (_btnCleanupMounts is not null) _btnCleanupMounts.Font = _chromeFont;
         if (_btnCaptureWim is not null) _btnCaptureWim.Font = _chromeFont;
         if (_btnApplyWim is not null) _btnApplyWim.Font = _chromeFont;
         if (_btnExportWim is not null) _btnExportWim.Font = _chromeFont;

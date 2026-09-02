@@ -672,6 +672,9 @@ public partial class MainForm
             Activate();
         }
 
+        if (result.Success)
+            ClearPendingWimUnmount(mountDirectory);
+
         await RefreshMountedWimStateAsync(result.Success ? mountDirectory : null);
 
         if (!result.Success)
@@ -701,6 +704,99 @@ public partial class MainForm
         await RefreshMountedWimStateAsync(selectedMountDirectory);
     }
 
+    private void LoadPendingWimUnmountState()
+    {
+        _pendingWimUnmounts.Clear();
+        foreach (PendingWimUnmountState state in PendingWimUnmountStateStore.Load())
+        {
+            if (string.IsNullOrWhiteSpace(state.MountDirectory))
+                continue;
+
+            try
+            {
+                _pendingWimUnmounts[NormalizeMountDirectoryKey(state.MountDirectory)] = state;
+            }
+            catch
+            {
+                // Ignore a malformed recovery record rather than blocking Imaging Manager startup.
+            }
+        }
+    }
+
+    private static string NormalizeMountDirectoryKey(string mountDirectory)
+    {
+        string fullPath = Path.GetFullPath(mountDirectory);
+        return Path.TrimEndingDirectorySeparator(fullPath);
+    }
+
+    private bool IsPendingWimUnmount(WimMountedImageInfo image)
+    {
+        if (string.IsNullOrWhiteSpace(image.MountDirectory))
+            return false;
+
+        string key = NormalizeMountDirectoryKey(image.MountDirectory);
+        if (!_pendingWimUnmounts.TryGetValue(key, out PendingWimUnmountState? state))
+            return false;
+
+        bool sameImage = string.IsNullOrWhiteSpace(state.ImageFile) ||
+                         string.IsNullOrWhiteSpace(image.ImageFile) ||
+                         string.Equals(
+                             Path.GetFullPath(state.ImageFile),
+                             Path.GetFullPath(image.ImageFile),
+                             StringComparison.OrdinalIgnoreCase);
+        bool sameIndex = state.ImageIndex <= 0 || image.ImageIndex <= 0 || state.ImageIndex == image.ImageIndex;
+        return sameImage && sameIndex;
+    }
+
+    private void MarkPendingWimUnmount(WimMountedImageInfo image)
+    {
+        string key = NormalizeMountDirectoryKey(image.MountDirectory);
+        _pendingWimUnmounts[key] = new PendingWimUnmountState
+        {
+            MountDirectory = image.MountDirectory,
+            ImageFile = image.ImageFile,
+            ImageIndex = image.ImageIndex
+        };
+        SavePendingWimUnmountState();
+    }
+
+    private void ClearPendingWimUnmount(string mountDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(mountDirectory))
+            return;
+
+        if (_pendingWimUnmounts.Remove(NormalizeMountDirectoryKey(mountDirectory)))
+            SavePendingWimUnmountState();
+    }
+
+    private void ReconcilePendingWimUnmountState(IReadOnlyList<WimMountedImageInfo> mountedImages)
+    {
+        HashSet<string> activeKeys = mountedImages
+            .Where(static image => !string.IsNullOrWhiteSpace(image.MountDirectory))
+            .Select(image => NormalizeMountDirectoryKey(image.MountDirectory))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        string[] staleKeys = _pendingWimUnmounts.Keys
+            .Where(key => !activeKeys.Contains(key))
+            .ToArray();
+
+        if (staleKeys.Length == 0)
+            return;
+
+        foreach (string key in staleKeys)
+            _pendingWimUnmounts.Remove(key);
+        SavePendingWimUnmountState();
+    }
+
+    private void SavePendingWimUnmountState() =>
+        PendingWimUnmountStateStore.Save(_pendingWimUnmounts.Values);
+
+    private static bool IsPartialUnmountCommitError(WimOperationResult result) =>
+        result.Output.Contains("0xc142011d", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsDirectoryStillOpenUnmountError(WimOperationResult result) =>
+        result.Output.Contains("0xc1420117", StringComparison.OrdinalIgnoreCase);
+
     private async Task RefreshMountedWimStateAsync(string? preferredMountDirectory = null)
     {
         if (_operationActive || IsDisposed)
@@ -713,6 +809,7 @@ public partial class MainForm
             if (result.Success)
             {
                 _mountedWims = result.Images;
+                ReconcilePendingWimUnmountState(_mountedWims);
                 RebuildMountedWimTiles(selectedMountDirectory);
             }
         }
@@ -767,6 +864,7 @@ public partial class MainForm
         }
 
         _mountedWims = result.Images;
+        ReconcilePendingWimUnmountState(_mountedWims);
         WimMountedImageInfo? current = _mountedWims.FirstOrDefault(image =>
             string.Equals(image.MountDirectory, selected.MountDirectory, StringComparison.OrdinalIgnoreCase));
         RebuildMountedWimTiles(current?.MountDirectory);
@@ -794,25 +892,153 @@ public partial class MainForm
         if (selected == null)
             return;
 
+        if (IsPendingWimUnmount(selected))
+        {
+            DialogResult finish = MessageBox.Show(
+                this,
+                $"The changes for this WIM have already been committed. Only the mount still needs to be released.\n\n{selected.DisplayName}\n\nClose any files, folders, or applications using the mount directory, then choose Yes to finish the unmount without committing again.",
+                "Finish Unmount",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
+            if (finish == DialogResult.Yes)
+                await RunPendingWimUnmountAsync(selected);
+            return;
+        }
+
         using UnmountWimDialog dialog = new(new[] { selected });
         DialogResult choice = dialog.ShowDialog(this);
         if (choice != DialogResult.Yes && choice != DialogResult.No)
             return;
 
-        bool commitChanges = choice == DialogResult.Yes;
-        await RunWimUnmountAsync(selected, commitChanges);
+        if (choice == DialogResult.Yes)
+            await RunWimCommitAndUnmountAsync(selected);
+        else
+            await RunWimDiscardUnmountAsync(selected);
     }
 
-    private async Task RunWimUnmountAsync(WimMountedImageInfo image, bool commitChanges)
+    private async Task RunWimCommitAndUnmountAsync(WimMountedImageInfo image)
     {
         _operationActive = true;
         UpdateSelectedDiskPanel();
         Enabled = false;
 
-        string action = commitChanges ? "Committing and unmounting WIM" : "Discarding changes and unmounting WIM";
         using WimServicingProgressDialog progressDialog = new(
             "Unmount WIM",
-            action,
+            "Saving changes to WIM",
+            image.MountDirectory);
+        progressDialog.Show(this);
+
+        Progress<WimOperationProgress> progress = new(update => progressDialog.UpdateProgress(update));
+        WimOperationResult commitResult = new()
+        {
+            Success = false,
+            ExitCode = -1,
+            Output = "The WIM commit did not start."
+        };
+        WimOperationResult? unmountResult = null;
+
+        try
+        {
+            try
+            {
+                commitResult = await _wimBackend.CommitAsync(
+                    image.MountDirectory,
+                    progress,
+                    CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                commitResult = new WimOperationResult { Success = false, ExitCode = -1, Output = ex.Message };
+            }
+
+            if (commitResult.Success)
+            {
+                // Persist the committed state before attempting to release the mount. If the
+                // unmount is blocked by an open handle (or the app closes unexpectedly), the
+                // next UI pass knows not to commit the same image again.
+                MarkPendingWimUnmount(image);
+                progressDialog.BeginPhase(
+                    "Releasing mounted WIM",
+                    image.MountDirectory,
+                    "The WIM is saved. Finishing the unmount...");
+
+                try
+                {
+                    unmountResult = await _wimBackend.UnmountDiscardAsync(
+                        image.MountDirectory,
+                        progress,
+                        CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    unmountResult = new WimOperationResult { Success = false, ExitCode = -1, Output = ex.Message };
+                }
+
+                if (unmountResult.Success)
+                    ClearPendingWimUnmount(image.MountDirectory);
+            }
+        }
+        finally
+        {
+            progressDialog.AllowClose();
+            progressDialog.Close();
+            _operationActive = false;
+            Enabled = true;
+            Activate();
+        }
+
+        await RefreshMountedWimStateAsync(image.MountDirectory);
+
+        if (!commitResult.Success)
+        {
+            if (IsPartialUnmountCommitError(commitResult))
+            {
+                DialogResult recover = MessageBox.Show(
+                    this,
+                    "DISM reports that this image is in a partial-unmount state and cannot be committed again (0xc142011d). This commonly occurs when a previous unmount-with-commit saved the WIM but could not release the mount directory.\n\nIf that is what happened, the previous commit probably succeeded. Do not commit it again.\n\nTreat this WIM as already committed and attempt an unmount-only recovery now?",
+                    "WIM Already Partially Unmounted",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2);
+
+                if (recover == DialogResult.Yes)
+                {
+                    MarkPendingWimUnmount(image);
+                    RebuildMountedWimTiles(image.MountDirectory);
+                    UpdateSelectedDiskPanel();
+                    await RunPendingWimUnmountAsync(image);
+                }
+                return;
+            }
+
+            ShowWimOperationFailure("Commit WIM Failed", commitResult);
+            return;
+        }
+
+        if (unmountResult is { Success: false })
+        {
+            ShowCommittedPendingUnmountFailure(image, unmountResult);
+            return;
+        }
+
+        MessageBox.Show(
+            this,
+            $"The WIM was committed and unmounted successfully.\n\n{image.ImageFile}",
+            "Unmount WIM",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+    }
+
+    private async Task RunWimDiscardUnmountAsync(WimMountedImageInfo image)
+    {
+        _operationActive = true;
+        UpdateSelectedDiskPanel();
+        Enabled = false;
+
+        using WimServicingProgressDialog progressDialog = new(
+            "Unmount WIM",
+            "Discarding changes and unmounting WIM",
             image.MountDirectory);
         progressDialog.Show(this);
 
@@ -820,9 +1046,250 @@ public partial class MainForm
         WimOperationResult result;
         try
         {
-            result = await _wimBackend.UnmountAsync(
+            result = await _wimBackend.UnmountDiscardAsync(
                 image.MountDirectory,
-                commitChanges,
+                progress,
+                CancellationToken.None);
+            if (result.Success)
+                ClearPendingWimUnmount(image.MountDirectory);
+        }
+        catch (Exception ex)
+        {
+            result = new WimOperationResult { Success = false, ExitCode = -1, Output = ex.Message };
+        }
+        finally
+        {
+            progressDialog.AllowClose();
+            progressDialog.Close();
+            _operationActive = false;
+            Enabled = true;
+            Activate();
+        }
+
+        await RefreshMountedWimStateAsync(image.MountDirectory);
+
+        if (!result.Success)
+        {
+            ShowWimOperationFailure("Unmount WIM Failed", result);
+            return;
+        }
+
+        MessageBox.Show(
+            this,
+            $"The mounted changes were discarded and the WIM was unmounted successfully.\n\n{image.ImageFile}",
+            "Unmount WIM",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+    }
+
+    private async Task RunPendingWimUnmountAsync(WimMountedImageInfo image)
+    {
+        _operationActive = true;
+        UpdateSelectedDiskPanel();
+        Enabled = false;
+
+        using WimServicingProgressDialog progressDialog = new(
+            "Finish Unmount",
+            "Finishing WIM unmount",
+            image.MountDirectory);
+        progressDialog.Show(this);
+
+        Progress<WimOperationProgress> progress = new(update => progressDialog.UpdateProgress(update));
+        WimOperationResult result;
+        try
+        {
+            result = await _wimBackend.UnmountDiscardAsync(
+                image.MountDirectory,
+                progress,
+                CancellationToken.None);
+            if (result.Success)
+                ClearPendingWimUnmount(image.MountDirectory);
+        }
+        catch (Exception ex)
+        {
+            result = new WimOperationResult { Success = false, ExitCode = -1, Output = ex.Message };
+        }
+        finally
+        {
+            progressDialog.AllowClose();
+            progressDialog.Close();
+            _operationActive = false;
+            Enabled = true;
+            Activate();
+        }
+
+        await RefreshMountedWimStateAsync(image.MountDirectory);
+
+        if (!result.Success)
+        {
+            ShowCommittedPendingUnmountFailure(image, result);
+            return;
+        }
+
+        MessageBox.Show(
+            this,
+            $"The already-committed WIM was unmounted successfully.\n\n{image.ImageFile}",
+            "Finish Unmount",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+    }
+
+    private void ShowCommittedPendingUnmountFailure(WimMountedImageInfo image, WimOperationResult result)
+    {
+        string reason = IsDirectoryStillOpenUnmountError(result)
+            ? "The mount directory could not be released because a file, folder, or application still has something open inside it."
+            : "DISM could not release the mount directory.";
+        string details = string.IsNullOrWhiteSpace(result.Output)
+            ? $"DISM exited with code {result.ExitCode}."
+            : result.Output;
+
+        MessageBox.Show(
+            this,
+            $"The WIM was committed successfully, but the unmount did not complete.\n\n{reason}\n\nThe changes are already saved to the WIM. Do not commit this mount again. Close anything using the mount directory, then select it and use Finish Unmount.\n\nMount: {image.MountDirectory}\n\n{details}",
+            "WIM Committed - Unmount Pending",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Warning);
+    }
+
+    private void ShowWimOperationFailure(string title, WimOperationResult result)
+    {
+        string details = string.IsNullOrWhiteSpace(result.Output)
+            ? $"DISM exited with code {result.ExitCode}."
+            : result.Output;
+        MessageBox.Show(this, details, title, MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
+
+    private async Task RemountWimAsync()
+    {
+        if (_operationActive)
+            return;
+
+        WimMountedImageInfo? selected = await ResolveSelectedMountedWimForActionAsync("Remount WIM");
+        if (selected == null)
+            return;
+
+        if (!IsMountedWimStatus(selected, "Needs Remount"))
+        {
+            MessageBox.Show(
+                this,
+                "The selected WIM no longer requires a remount. The mounted-image list has been refreshed.",
+                "Remount WIM",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        DialogResult confirm = MessageBox.Show(
+            this,
+            $"Remount this inaccessible WIM so it can be serviced again?\n\n{selected.DisplayName}",
+            "Remount WIM",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button2);
+        if (confirm != DialogResult.Yes)
+            return;
+
+        _operationActive = true;
+        UpdateSelectedDiskPanel();
+        Enabled = false;
+
+        using WimServicingProgressDialog progressDialog = new(
+            "Remount WIM",
+            "Remounting WIM",
+            selected.MountDirectory);
+        progressDialog.Show(this);
+
+        Progress<WimOperationProgress> progress = new(update => progressDialog.UpdateProgress(update));
+        WimOperationResult result;
+        try
+        {
+            result = await _wimBackend.RemountAsync(
+                selected.MountDirectory,
+                progress,
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            result = new WimOperationResult { Success = false, ExitCode = -1, Output = ex.Message };
+        }
+        finally
+        {
+            progressDialog.AllowClose();
+            progressDialog.Close();
+            _operationActive = false;
+            Enabled = true;
+            Activate();
+        }
+
+        await RefreshMountedWimStateAsync(selected.MountDirectory);
+
+        if (!result.Success)
+        {
+            string details = string.IsNullOrWhiteSpace(result.Output)
+                ? $"DISM exited with code {result.ExitCode}."
+                : result.Output;
+            MessageBox.Show(this, details, "Remount WIM Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        MessageBox.Show(
+            this,
+            $"The WIM was remounted successfully.\n\n{selected.ImageFile}",
+            "Remount WIM",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+    }
+
+    private async Task CleanupMountsAsync()
+    {
+        if (_operationActive)
+            return;
+
+        await RefreshMountedWimStateAsync();
+        WimMountedImageInfo[] invalidMounts = _mountedWims
+            .Where(static image => IsMountedWimStatus(image, "Invalid"))
+            .ToArray();
+
+        if (invalidMounts.Length == 0)
+        {
+            MessageBox.Show(
+                this,
+                "DISM no longer reports any invalid WIM mounts. The mounted-image list has been refreshed.",
+                "Cleanup Mounts",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        string invalidSummary = invalidMounts.Length == 1
+            ? "DISM currently reports 1 invalid WIM mount."
+            : $"DISM currently reports {invalidMounts.Length} invalid WIM mounts.";
+
+        DialogResult confirm = MessageBox.Show(
+            this,
+            $"{invalidSummary}\n\nDISM Cleanup-Mountpoints is a system-wide cleanup operation. It removes resources associated with corrupted mounted images. It does not unmount healthy images and does not remove mounts that can be recovered with Remount WIM.\n\nContinue with cleanup?",
+            "Cleanup Mounts",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+        if (confirm != DialogResult.Yes)
+            return;
+
+        _operationActive = true;
+        UpdateSelectedDiskPanel();
+        Enabled = false;
+
+        using WimServicingProgressDialog progressDialog = new(
+            "Cleanup Mounts",
+            "Cleaning corrupted WIM mount resources",
+            invalidSummary);
+        progressDialog.Show(this);
+
+        Progress<WimOperationProgress> progress = new(update => progressDialog.UpdateProgress(update));
+        WimOperationResult result;
+        try
+        {
+            result = await _wimBackend.CleanupMountpointsAsync(
                 progress,
                 CancellationToken.None);
         }
@@ -846,16 +1313,14 @@ public partial class MainForm
             string details = string.IsNullOrWhiteSpace(result.Output)
                 ? $"DISM exited with code {result.ExitCode}."
                 : result.Output;
-            MessageBox.Show(this, details, "Unmount WIM Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(this, details, "Cleanup Mounts Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
 
         MessageBox.Show(
             this,
-            commitChanges
-                ? $"The WIM was committed and unmounted successfully.\n\n{image.ImageFile}"
-                : $"The mounted changes were discarded and the WIM was unmounted successfully.\n\n{image.ImageFile}",
-            "Unmount WIM",
+            "DISM completed the corrupted mount-point cleanup successfully. The mounted-WIM inventory has been refreshed.",
+            "Cleanup Mounts",
             MessageBoxButtons.OK,
             MessageBoxIcon.Information);
     }

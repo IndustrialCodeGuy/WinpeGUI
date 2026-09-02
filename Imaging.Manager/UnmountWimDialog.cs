@@ -94,7 +94,7 @@ internal sealed class UnmountWimDialog : Form
             Width = 618,
             Height = 52,
             AutoSize = false,
-            Text = "Commit saves changes back to the WIM. Discard abandons changes made while the image was mounted."
+            Text = "Commit saves changes to the WIM first, then releases the mount. Discard releases the mount without saving pending changes."
         };
 
         Button cancel = new()
@@ -150,7 +150,7 @@ internal sealed class UnmountWimDialog : Form
         _details.Text = $"Image: {image.ImageFile}\nMount folder: {image.MountDirectory}\nMode: {mode}    Status: {status}";
         _commit.Enabled = image.ReadWrite;
         _note.Text = image.ReadWrite
-            ? "Commit saves changes back to the WIM. Discard abandons changes made while the image was mounted."
+            ? "Commit saves changes to the WIM first, then releases the mount. Discard releases the mount without saving pending changes."
             : "This image is mounted read-only, so there are no writable changes to commit. Use Discard to unmount it.";
     }
 }

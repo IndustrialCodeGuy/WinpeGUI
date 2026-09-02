@@ -104,6 +104,8 @@ public partial class MainForm
         _btnApply = CreateActionButton("Apply FFU", async () => await ApplyToSelectedDiskAsync());
         _btnMountWim = CreateActionButton("Mount WIM", async () => await MountWimAsync());
         _btnUnmountWim = CreateActionButton("Unmount WIM", async () => await UnmountWimAsync());
+        _btnRemountWim = CreateActionButton("Remount WIM", async () => await RemountWimAsync());
+        _btnCleanupMounts = CreateActionButton("Cleanup Mounts", async () => await CleanupMountsAsync());
         _btnCaptureWim = CreateActionButton("Capture WIM", async () => await CaptureSelectedPartitionWimAsync());
         _btnApplyWim = CreateActionButton("Apply WIM", async () => await ApplyWimToSelectedPartitionAsync());
         _btnDeployWim = CreateActionButton("Deploy WIM", async () => await DeployWimToSelectedDiskAsync());
@@ -128,6 +130,7 @@ public partial class MainForm
 
         _pnlGlobalActions.Controls.Add(_btnMountWim);
         _pnlGlobalActions.Controls.Add(_btnExportWim);
+        _pnlGlobalActions.Controls.Add(_btnCleanupMounts);
         _pnlGlobalActions.Controls.Add(_btnRefresh);
 
         _pnlContextActions.Controls.Add(_lblSelectionContext);
@@ -138,6 +141,7 @@ public partial class MainForm
         _pnlContextActions.Controls.Add(_btnCaptureWim);
         _pnlContextActions.Controls.Add(_btnApplyWim);
         _pnlContextActions.Controls.Add(_btnUnmountWim);
+        _pnlContextActions.Controls.Add(_btnRemountWim);
         _pnlContextActions.Controls.Add(_btnAddDrivers);
         _pnlContextActions.Controls.Add(_btnUnlock);
 
@@ -207,10 +211,19 @@ public partial class MainForm
 
     private void LayoutGlobalActionStrip(int buttonWidth, int buttonHeight, int buttonGap)
     {
+        Button[] leftButtons =
+        {
+            _btnMountWim,
+            _btnExportWim,
+            _btnCleanupMounts
+        };
+
         int left = 0;
-        SetBoundsIfChanged(_btnMountWim, left, 0, buttonWidth, buttonHeight);
-        left += buttonWidth + buttonGap;
-        SetBoundsIfChanged(_btnExportWim, left, 0, buttonWidth, buttonHeight);
+        foreach (Button button in leftButtons.Where(static button => button.Visible))
+        {
+            SetBoundsIfChanged(button, left, 0, buttonWidth, buttonHeight);
+            left += buttonWidth + buttonGap;
+        }
 
         int refreshLeft = Math.Max(0, _pnlGlobalActions.ClientSize.Width - buttonWidth);
         SetBoundsIfChanged(_btnRefresh, refreshLeft, 0, buttonWidth, buttonHeight);
@@ -227,6 +240,7 @@ public partial class MainForm
             _btnCaptureWim,
             _btnApplyWim,
             _btnUnmountWim,
+            _btnRemountWim,
             _btnAddDrivers,
             _btnUnlock
         };
@@ -659,7 +673,7 @@ public partial class MainForm
         Panel tile = new()
         {
             Width = _mPx.MountedWimTileWidth,
-            Height = _mPx.PartitionTileHeight,
+            Height = _mPx.DiskRowHeight,
             Margin = new Padding(0),
             Padding = new Padding(0),
             BorderStyle = BorderStyle.FixedSingle,
@@ -680,9 +694,13 @@ public partial class MainForm
             UseMnemonic = false,
             Cursor = Cursors.Hand
         };
+        string mountStatus = GetMountedWimAbnormalStatus(image);
+        string mountLine = string.IsNullOrWhiteSpace(mountStatus)
+            ? image.MountDirectory
+            : $"{image.MountDirectory} — {mountStatus}";
         Label sub = new()
         {
-            Text = image.MountDirectory,
+            Text = mountLine,
             ForeColor = ShellTheme.TextColor,
             TextAlign = ContentAlignment.MiddleLeft,
             AutoEllipsis = true,
@@ -861,10 +879,11 @@ public partial class MainForm
         if (_pnlMountedWims == null || _pnlMountedWims.IsDisposed)
             return;
 
+        int tileHeight = Math.Max(1, _pnlMountedWims.ClientSize.Height);
         foreach (Panel tile in _pnlMountedWims.Controls.OfType<Panel>())
         {
             tile.Width = _mPx.MountedWimTileWidth;
-            tile.Height = _mPx.PartitionTileHeight;
+            tile.Height = tileHeight;
             LayoutMountedWimTile(tile);
         }
     }
@@ -1189,6 +1208,25 @@ public partial class MainForm
         return "Used: —";
     }
 
+    private static bool IsMountedWimStatus(WimMountedImageInfo image, string status) =>
+        string.Equals(image.Status?.Trim(), status, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsMountedWimHealthyOrUnknown(WimMountedImageInfo image) =>
+        string.IsNullOrWhiteSpace(image.Status) || IsMountedWimStatus(image, "OK");
+
+    private string GetMountedWimAbnormalStatus(WimMountedImageInfo image)
+    {
+        if (IsPendingWimUnmount(image))
+            return "Committed — pending unmount";
+        if (IsMountedWimStatus(image, "Needs Remount"))
+            return "Needs Remount";
+        if (IsMountedWimStatus(image, "Invalid"))
+            return "Invalid";
+        if (!IsMountedWimHealthyOrUnknown(image))
+            return image.Status.Trim();
+        return string.Empty;
+    }
+
     private void UpdateSelectedDiskPanel()
     {
         ImagingDiskInfo? disk = GetSelectedDisk();
@@ -1198,6 +1236,16 @@ public partial class MainForm
         bool diskSelectionActive = disk != null && partition == null && mountedWim == null;
         bool partitionSelectionActive = disk != null && partition != null && mountedWim == null;
         bool mountedWimSelectionActive = mountedWim != null;
+        bool mountedWimPendingUnmount = mountedWimSelectionActive &&
+                                        IsPendingWimUnmount(mountedWim!);
+        bool mountedWimNeedsRemount = mountedWimSelectionActive &&
+                                      !mountedWimPendingUnmount &&
+                                      IsMountedWimStatus(mountedWim!, "Needs Remount");
+        bool anyInvalidMountedWim = _mountedWims.Any(static image =>
+            IsMountedWimStatus(image, "Invalid"));
+        bool mountedWimHealthyOrUnknown = mountedWimSelectionActive &&
+                                          !mountedWimPendingUnmount &&
+                                          IsMountedWimHealthyOrUnknown(mountedWim!);
         bool partitionIsOfflineWindows = partitionSelectionActive &&
                                          TryGetOfflineWindowsRoot(partition!, out _);
         bool partitionIsLocked = partitionSelectionActive &&
@@ -1207,9 +1255,11 @@ public partial class MainForm
 
         _btnMountWim.Visible = true;
         _btnExportWim.Visible = true;
+        _btnCleanupMounts.Visible = true;
         _btnRefresh.Visible = true;
         _btnMountWim.Enabled = !_operationActive;
         _btnExportWim.Enabled = !_operationActive;
+        _btnCleanupMounts.Enabled = !_operationActive && anyInvalidMountedWim;
         _btnRefresh.Enabled = !_operationActive;
 
         _btnGetInfo.Visible = diskSelectionActive || partitionSelectionActive || mountedWimSelectionActive;
@@ -1218,8 +1268,10 @@ public partial class MainForm
         _btnDeployWim.Visible = diskSelectionActive;
         _btnCaptureWim.Visible = partitionSelectionActive;
         _btnApplyWim.Visible = partitionSelectionActive;
-        _btnUnmountWim.Visible = mountedWimSelectionActive;
-        _btnAddDrivers.Visible = mountedWimSelectionActive || partitionIsOfflineWindows;
+        _btnUnmountWim.Text = mountedWimPendingUnmount ? "Finish Unmount" : "Unmount WIM";
+        _btnUnmountWim.Visible = mountedWimHealthyOrUnknown || mountedWimPendingUnmount;
+        _btnRemountWim.Visible = mountedWimNeedsRemount;
+        _btnAddDrivers.Visible = mountedWimHealthyOrUnknown || partitionIsOfflineWindows;
         _btnUnlock.Visible = partitionIsLocked;
 
         _btnGetInfo.Enabled = !_operationActive && _btnGetInfo.Visible;
@@ -1228,9 +1280,10 @@ public partial class MainForm
         _btnDeployWim.Enabled = !_operationActive && diskSelectionActive;
         _btnCaptureWim.Enabled = !_operationActive && partitionSelectionActive;
         _btnApplyWim.Enabled = !_operationActive && partitionSelectionActive;
-        _btnUnmountWim.Enabled = !_operationActive && mountedWimSelectionActive;
+        _btnUnmountWim.Enabled = !_operationActive && (mountedWimHealthyOrUnknown || mountedWimPendingUnmount);
+        _btnRemountWim.Enabled = !_operationActive && mountedWimNeedsRemount;
         _btnAddDrivers.Enabled = !_operationActive &&
-                                 ((mountedWimSelectionActive && mountedWim!.ReadWrite) ||
+                                 ((mountedWimHealthyOrUnknown && mountedWim!.ReadWrite) ||
                                   partitionIsOfflineWindows);
         _btnUnlock.Enabled = !_operationActive && partitionIsLocked;
 
@@ -1242,6 +1295,7 @@ public partial class MainForm
                     ? $"Disk {disk!.DiskNumber}"
                     : "Select a disk, partition, or mounted WIM";
 
+        LayoutGlobalActionStrip(_mPx.DetailButtonWidth, _mPx.DetailButtonHeight, _mPx.DetailButtonGap);
         LayoutContextActionStrip(_mPx.DetailButtonWidth, _mPx.DetailButtonHeight, _mPx.DetailButtonGap);
         UpdateStatusLine();
     }
@@ -1273,8 +1327,9 @@ public partial class MainForm
         }
         else if (GetSelectedPartition() is ImagingPartitionInfo partition)
         {
+            ImagingDiskInfo? parentDisk = GetSelectedDisk();
             title = $"{GetPartitionDisplayName(partition)} Information";
-            details = BuildPartitionDetails(partition);
+            details = BuildPartitionDetails(parentDisk, partition);
         }
         else if (GetSelectedDisk() is ImagingDiskInfo disk)
         {
@@ -1293,87 +1348,303 @@ public partial class MainForm
     private string BuildDiskDetails(ImagingDiskInfo disk)
     {
         StringBuilder text = new();
-        text.AppendLine($"Disk {disk.DiskNumber}");
-        if (!string.IsNullOrWhiteSpace(disk.Model)) text.AppendLine(disk.Model);
-        text.AppendLine($"Size:       {FormatBytes(disk.SizeBytes)}");
-        text.AppendLine($"Status:     {disk.IsOffline switch { true => "Offline", false => "Online", _ => "Unknown" }}");
-        if (!string.IsNullOrWhiteSpace(disk.InterfaceType)) text.AppendLine($"Interface:  {disk.InterfaceType}");
-        text.AppendLine($"Device:     {disk.DevicePath}");
-        text.AppendLine();
-        text.AppendLine("BitLocker / FFU capture");
-        if (!disk.BitLockerStatusAvailable)
+        ImagingDiskStorageInfo? storage = disk.StorageInfo;
+
+        AppendInfoSection(text, $"Disk {disk.DiskNumber}");
+        AppendInfoLine(text, "Number", disk.DiskNumber.ToString());
+        AppendInfoLine(text, "Friendly name", FirstNonEmpty(storage?.FriendlyName, disk.Model));
+        AppendInfoLine(text, "Model", FirstNonEmpty(storage?.Model, disk.Model));
+        AppendInfoLine(text, "Manufacturer", storage?.Manufacturer);
+        AppendInfoLine(text, "Serial number", FirstNonEmpty(storage?.SerialNumber, disk.SerialNumber));
+        AppendInfoLine(text, "Firmware", storage?.FirmwareVersion);
+        AppendInfoLine(text, "Size", FormatBytes(storage is { SizeBytes: > 0 } ? storage.SizeBytes : disk.SizeBytes));
+        AppendInfoLine(text, "Partition style", storage?.PartitionStyle);
+        AppendInfoLine(text, "Bus type", storage?.BusType);
+        AppendInfoLine(text, "Interface", disk.InterfaceType);
+        AppendInfoLine(text, "Media type", disk.MediaType);
+        AppendInfoLine(text, "Operational status", FirstNonEmpty(storage?.OperationalStatus, FormatOnlineState(disk.IsOffline)));
+        AppendInfoLine(text, "Health status", storage?.HealthStatus);
+        AppendInfoLine(text, "Offline", FormatNullableBoolean(storage?.IsOffline ?? disk.IsOffline));
+        if (storage != null)
         {
-            text.AppendLine("  BitLocker status unavailable; encryption state could not be verified.");
-            if (!string.IsNullOrWhiteSpace(disk.BitLockerStatusError))
-                text.AppendLine($"  Status error: {disk.BitLockerStatusError}");
+            if (storage.IsOffline == true)
+                AppendInfoLine(text, "Offline reason", storage.OfflineReason);
+            AppendInfoLine(text, "Read only", FormatNullableBoolean(storage.IsReadOnly));
+            AppendInfoLine(text, "System disk", FormatNullableBoolean(storage.IsSystem));
+            AppendInfoLine(text, "Boot disk", FormatNullableBoolean(storage.IsBoot));
+            AppendInfoLine(text, "Boot from disk", FormatNullableBoolean(storage.BootFromDisk));
+            AppendInfoLine(text, "Clustered", FormatNullableBoolean(storage.IsClustered));
         }
-        else if (disk.BitLockerVolumes.Count == 0)
+
+        AppendInfoSection(text, "Capacity / geometry");
+        if (storage != null)
         {
-            text.AppendLine("  No encrypted BitLocker volume detected.");
+            AppendInfoLine(text, "Allocated size", FormatBytes(storage.AllocatedSizeBytes));
+            AppendInfoLine(text, "Largest free extent", FormatBytes(storage.LargestFreeExtentBytes));
+            AppendInfoLine(text, "Partitions", storage.NumberOfPartitions.ToString());
+            AppendInfoLine(text, "Provisioning", storage.ProvisioningType);
+            AppendInfoLine(text, "Logical sector size", FormatByteCount(storage.LogicalSectorSize));
+            AppendInfoLine(text, "Physical sector size", FormatByteCount(storage.PhysicalSectorSize));
         }
         else
         {
-            foreach (ImagingBitLockerVolumeInfo volume in disk.BitLockerVolumes)
-            {
-                string percent = volume.EncryptionPercentage.HasValue ? $"{volume.EncryptionPercentage.Value}%" : "unknown %";
-                string lockText = volume.IsLocked switch { true => "Locked", false => "Unlocked", _ => "Lock unknown" };
-                string conversion = string.IsNullOrWhiteSpace(volume.ConversionStatus) ? "status unknown" : volume.ConversionStatus;
-                string encryptionType = string.IsNullOrWhiteSpace(volume.EncryptionType) ? string.Empty : $"  {volume.EncryptionType}";
-                text.AppendLine($"  {volume.MountPoint.TrimEnd('\\')}  {conversion}  {percent}{encryptionType}  {lockText}");
-            }
+            AppendInfoLine(text, "Partitions", disk.Partitions.Count.ToString());
         }
 
+        AppendInfoSection(text, "Identity / paths");
+        AppendInfoLine(text, "Device", disk.DevicePath);
+        if (storage != null)
+        {
+            AppendInfoLine(text, "Storage path", storage.Path);
+            AppendInfoLine(text, "Location", storage.Location);
+            AppendInfoLine(text, "Unique ID", storage.UniqueId);
+            AppendInfoLine(text, "Unique ID format", storage.UniqueIdFormat);
+            if (string.Equals(storage.PartitionStyle, "GPT", StringComparison.OrdinalIgnoreCase))
+                AppendInfoLine(text, "Disk GUID", storage.Guid);
+            if (string.Equals(storage.PartitionStyle, "MBR", StringComparison.OrdinalIgnoreCase) && storage.Signature.HasValue)
+                AppendInfoLine(text, "MBR signature", $"0x{storage.Signature.Value:X8}");
+        }
+
+        if (!disk.StorageInfoAvailable)
+        {
+            AppendInfoSection(text, "Storage provider");
+            text.AppendLine("Detailed MSFT_Disk information is unavailable in this environment.");
+            if (!string.IsNullOrWhiteSpace(disk.StorageInfoError))
+                AppendInfoLine(text, "Error", disk.StorageInfoError);
+        }
+
+        AppendBitLockerDetails(text, disk);
         return text.ToString().TrimEnd();
     }
 
-    private string BuildPartitionDetails(ImagingPartitionInfo partition)
+    private string BuildPartitionDetails(ImagingDiskInfo? disk, ImagingPartitionInfo partition)
     {
         StringBuilder text = new();
-        text.AppendLine($"Partition:  {partition.PartitionNumber}");
+        ImagingPartitionStorageInfo? storage = partition.StorageInfo;
+
+        int reportedPartitionNumber = storage?.PartitionNumber ?? partition.PartitionNumber;
+        AppendInfoSection(text, $"Partition {reportedPartitionNumber}");
+        if (disk != null)
+            AppendInfoLine(text, "Disk number", disk.DiskNumber.ToString());
+        AppendInfoLine(text, "Partition number", reportedPartitionNumber.ToString());
+        if (storage != null && storage.PartitionNumber != partition.PartitionNumber)
+            AppendInfoLine(text, "Win32 partition index", partition.PartitionNumber.ToString());
 
         string drives = partition.DriveLetters.Count == 0
             ? "None"
             : string.Join(", ", partition.DriveLetters.Select(static d => d.TrimEnd('\\')));
-        text.AppendLine($"Drive:      {drives}");
-        text.AppendLine($"Size:       {FormatBytes(partition.SizeBytes)}");
-        if (!string.IsNullOrWhiteSpace(partition.Type))
-            text.AppendLine($"Type:       {partition.Type}");
-        text.AppendLine($"Primary:    {(partition.PrimaryPartition ? "Yes" : "No")}");
-        text.AppendLine($"Boot:       {(partition.BootPartition ? "Yes" : "No")}");
-        if (!string.IsNullOrWhiteSpace(partition.DeviceId))
-            text.AppendLine($"Device:     {partition.DeviceId}");
+        AppendInfoLine(text, "Drive letter(s)", drives);
+        AppendInfoLine(text, "Size", FormatBytes(storage is { SizeBytes: > 0 } ? storage.SizeBytes : partition.SizeBytes));
+        AppendInfoLine(text, "Offset", FormatByteOffset(storage?.OffsetBytes ?? partition.StartingOffsetBytes));
+        AppendInfoLine(text, "Win32 type", partition.Type);
+        AppendInfoLine(text, "Operational status", storage?.OperationalStatus);
+        AppendInfoLine(text, "Transition state", storage?.TransitionState);
 
-        ImagingBitLockerVolumeInfo? bitLocker = GetBitLockerVolumeForPartition(partition);
-        if (bitLocker?.IsBitLockerCapable == true)
+        if (storage != null)
         {
-            text.AppendLine("BitLocker");
-            string state = bitLocker.IsLocked switch
+            AppendInfoLine(text, "GPT type", storage.GptType);
+            AppendInfoLine(text, "MBR type", storage.MbrType);
+            AppendInfoLine(text, "Partition GUID", storage.Guid);
+        }
+
+        AppendInfoSection(text, "Attributes");
+        AppendInfoLine(text, "Primary", partition.PrimaryPartition ? "Yes" : "No");
+        AppendInfoLine(text, "Boot (Win32)", partition.BootPartition ? "Yes" : "No");
+        if (storage != null)
+        {
+            AppendInfoLine(text, "Read only", FormatNullableBoolean(storage.IsReadOnly));
+            AppendInfoLine(text, "Offline", FormatNullableBoolean(storage.IsOffline));
+            AppendInfoLine(text, "System", FormatNullableBoolean(storage.IsSystem));
+            AppendInfoLine(text, "Boot", FormatNullableBoolean(storage.IsBoot));
+            AppendInfoLine(text, "Active", FormatNullableBoolean(storage.IsActive));
+            AppendInfoLine(text, "Hidden", FormatNullableBoolean(storage.IsHidden));
+            AppendInfoLine(text, "Shadow copy", FormatNullableBoolean(storage.IsShadowCopy));
+            AppendInfoLine(text, "No default drive letter", FormatNullableBoolean(storage.NoDefaultDriveLetter));
+        }
+
+        AppendInfoSection(text, "Paths");
+        AppendInfoLine(text, "Device", partition.DeviceId);
+        if (storage != null)
+        {
+            AppendInfoLine(text, "Storage drive letter", storage.DriveLetter);
+            if (storage.AccessPaths.Count == 0)
             {
-                true => "Locked",
-                false => bitLocker.VisualState == BitLockerVisualState.ProtectionOff ? "Unlocked · Protection off" : "Unlocked",
-                _ => "Status unknown"
-            };
-            text.AppendLine($"Status:     {state}");
-            if (bitLocker.EncryptionPercentage.HasValue)
-                text.AppendLine($"Encrypted:  {bitLocker.EncryptionPercentage.Value}%");
-            if (!string.IsNullOrWhiteSpace(bitLocker.ConversionStatus))
-                text.AppendLine($"Conversion: {bitLocker.ConversionStatus}");
+                AppendInfoLine(text, "Access paths", "None");
+            }
+            else
+            {
+                AppendInfoLine(text, "Access paths", storage.AccessPaths[0]);
+                foreach (string path in storage.AccessPaths.Skip(1))
+                    AppendInfoContinuation(text, path);
+            }
+        }
+
+        AppendVolumeDetails(text, partition);
+        AppendPartitionBitLockerDetails(text, partition);
+
+        if (storage == null)
+        {
+            AppendInfoSection(text, "Storage provider");
+            text.AppendLine("Detailed MSFT_Partition information is unavailable for this partition.");
+            if (disk != null && !disk.PartitionStorageInfoAvailable && !string.IsNullOrWhiteSpace(disk.PartitionStorageInfoError))
+                AppendInfoLine(text, "Error", disk.PartitionStorageInfoError);
         }
 
         return text.ToString().TrimEnd();
     }
 
-    private static string BuildMountedWimDetails(WimMountedImageInfo image)
+    private string BuildMountedWimDetails(WimMountedImageInfo image)
     {
         StringBuilder text = new();
-        text.AppendLine($"Image:       {image.ImageFile}");
+        AppendInfoSection(text, "Mounted WIM");
+        AppendInfoLine(text, "Image", image.ImageFile);
         if (image.ImageIndex > 0)
-            text.AppendLine($"Index:       {image.ImageIndex}");
-        text.AppendLine($"Mount:       {image.MountDirectory}");
-        text.AppendLine($"Mode:        {(image.ReadWrite ? "Read/write" : "Read-only")}");
-        text.AppendLine($"Status:      {(string.IsNullOrWhiteSpace(image.Status) ? "Unknown" : image.Status)}");
+            AppendInfoLine(text, "Index", image.ImageIndex.ToString());
+        AppendInfoLine(text, "Mount", image.MountDirectory);
+        AppendInfoLine(text, "Mode", image.ReadWrite ? "Read/write" : "Read-only");
+        AppendInfoLine(text, "Status", string.IsNullOrWhiteSpace(image.Status) ? "Unknown" : image.Status);
+        if (IsPendingWimUnmount(image))
+            AppendInfoLine(text, "Pending action", "Finish unmount (changes already committed)");
         return text.ToString().TrimEnd();
     }
+
+    private void AppendBitLockerDetails(StringBuilder text, ImagingDiskInfo disk)
+    {
+        AppendInfoSection(text, "BitLocker / FFU capture");
+        if (!disk.BitLockerStatusAvailable)
+        {
+            text.AppendLine("BitLocker status unavailable; encryption state could not be verified.");
+            if (!string.IsNullOrWhiteSpace(disk.BitLockerStatusError))
+                AppendInfoLine(text, "Status error", disk.BitLockerStatusError);
+            return;
+        }
+
+        if (disk.BitLockerVolumes.Count == 0)
+        {
+            text.AppendLine("No BitLocker-capable volume detected on a lettered partition.");
+            return;
+        }
+
+        foreach (ImagingBitLockerVolumeInfo volume in disk.BitLockerVolumes)
+        {
+            string mount = volume.MountPoint.TrimEnd('\\');
+            string state = volume.IsLocked switch { true => "Locked", false => "Unlocked", _ => "Lock unknown" };
+            string conversion = string.IsNullOrWhiteSpace(volume.ConversionStatus) ? "Status unknown" : volume.ConversionStatus;
+            string percent = volume.EncryptionPercentage.HasValue ? $"{volume.EncryptionPercentage.Value}%" : "Unknown";
+            text.AppendLine(mount.Length == 0 ? "Volume" : mount);
+            AppendInfoLine(text, "  Conversion", conversion);
+            AppendInfoLine(text, "  Encrypted", percent);
+            AppendInfoLine(text, "  Encryption type", volume.EncryptionType);
+            AppendInfoLine(text, "  Protection", volume.ProtectionStatus);
+            AppendInfoLine(text, "  Lock state", state);
+        }
+    }
+
+    private void AppendPartitionBitLockerDetails(StringBuilder text, ImagingPartitionInfo partition)
+    {
+        ImagingBitLockerVolumeInfo? bitLocker = GetBitLockerVolumeForPartition(partition);
+        if (bitLocker?.IsBitLockerCapable != true)
+            return;
+
+        AppendInfoSection(text, "BitLocker");
+        string state = bitLocker.IsLocked switch
+        {
+            true => "Locked",
+            false => bitLocker.VisualState == BitLockerVisualState.ProtectionOff ? "Unlocked · Protection off" : "Unlocked",
+            _ => "Status unknown"
+        };
+        AppendInfoLine(text, "Status", state);
+        if (bitLocker.EncryptionPercentage.HasValue)
+            AppendInfoLine(text, "Encrypted", $"{bitLocker.EncryptionPercentage.Value}%");
+        AppendInfoLine(text, "Conversion", bitLocker.ConversionStatus);
+        AppendInfoLine(text, "Encryption type", bitLocker.EncryptionType);
+        AppendInfoLine(text, "Protection", bitLocker.ProtectionStatus);
+        AppendInfoLine(text, "Volume type", bitLocker.VolumeTypeText);
+        AppendInfoLine(text, "Volume label", bitLocker.VolumeLabel);
+    }
+
+    private static void AppendVolumeDetails(StringBuilder text, ImagingPartitionInfo partition)
+    {
+        if (partition.DriveLetters.Count == 0)
+            return;
+
+        bool wroteSection = false;
+        foreach (string drive in partition.DriveLetters)
+        {
+            try
+            {
+                string root = ImagingPath.NormalizeDriveRoot(drive);
+                if (root.Length == 0)
+                    continue;
+
+                DriveInfo info = new(root);
+                if (!wroteSection)
+                {
+                    AppendInfoSection(text, "Volume");
+                    wroteSection = true;
+                }
+
+                text.AppendLine(root.TrimEnd('\\'));
+                AppendInfoLine(text, "  Ready", info.IsReady ? "Yes" : "No");
+                AppendInfoLine(text, "  Drive type", info.DriveType.ToString());
+                if (!info.IsReady)
+                    continue;
+
+                AppendInfoLine(text, "  Label", info.VolumeLabel);
+                AppendInfoLine(text, "  File system", info.DriveFormat);
+                AppendInfoLine(text, "  Total", FormatBytes((ulong)Math.Max(0, info.TotalSize)));
+                AppendInfoLine(text, "  Used", FormatBytes((ulong)Math.Max(0, info.TotalSize - info.TotalFreeSpace)));
+                AppendInfoLine(text, "  Free", FormatBytes((ulong)Math.Max(0, info.TotalFreeSpace)));
+                AppendInfoLine(text, "  Available free", FormatBytes((ulong)Math.Max(0, info.AvailableFreeSpace)));
+            }
+            catch
+            {
+                // The partition may be locked or otherwise inaccessible in WinPE.
+            }
+        }
+    }
+
+    private static void AppendInfoSection(StringBuilder text, string heading)
+    {
+        if (text.Length > 0)
+            text.AppendLine();
+        text.AppendLine(heading);
+        text.AppendLine(new string('-', Math.Min(heading.Length, 48)));
+    }
+
+    private static void AppendInfoLine(StringBuilder text, string label, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+        text.AppendLine($"{label + ":",-24}{value.Trim()}");
+    }
+
+    private static void AppendInfoContinuation(StringBuilder text, string value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+            text.AppendLine($"{"",-24}{value.Trim()}");
+    }
+
+    private static string FirstNonEmpty(params string?[] values) =>
+        values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
+
+    private static string FormatNullableBoolean(bool? value) => value switch
+    {
+        true => "Yes",
+        false => "No",
+        _ => "Unknown"
+    };
+
+    private static string FormatOnlineState(bool? isOffline) => isOffline switch
+    {
+        true => "Offline",
+        false => "Online",
+        _ => "Unknown"
+    };
+
+    private static string FormatByteCount(uint bytes) => bytes == 0 ? "Unknown" : $"{bytes:N0} bytes";
+
+    private static string FormatByteOffset(ulong bytes) => $"{FormatBytes(bytes)} ({bytes:N0} bytes)";
 
     private void UpdateStatusLine()
     {

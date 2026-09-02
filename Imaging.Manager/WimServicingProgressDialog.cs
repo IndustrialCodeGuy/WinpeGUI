@@ -5,6 +5,8 @@ namespace Imaging.Manager;
 
 internal sealed class WimServicingProgressDialog : Form
 {
+    private readonly Label _heading;
+    private readonly Label _detail;
     private readonly ProgressBar _progress;
     private readonly Label _status;
     private bool _allowClose;
@@ -23,7 +25,7 @@ internal sealed class WimServicingProgressDialog : Form
         BackColor = ShellTheme.WindowBack;
         ForeColor = ShellTheme.TextColor;
 
-        Label title = new()
+        _heading = new Label
         {
             Left = 16,
             Top = 14,
@@ -34,7 +36,7 @@ internal sealed class WimServicingProgressDialog : Form
             Text = heading
         };
 
-        Label detailLabel = new()
+        _detail = new Label
         {
             Left = 16,
             Top = 50,
@@ -64,7 +66,18 @@ internal sealed class WimServicingProgressDialog : Form
             Text = "Starting DISM..."
         };
 
-        Controls.AddRange(new Control[] { title, detailLabel, _progress, _status });
+        Controls.AddRange(new Control[] { _heading, _detail, _progress, _status });
+    }
+
+    public void BeginPhase(string heading, string detail, string status = "Starting DISM...")
+    {
+        if (IsDisposed)
+            return;
+
+        _heading.Text = heading;
+        _detail.Text = detail;
+        _progress.Style = ProgressBarStyle.Marquee;
+        _status.Text = status;
     }
 
     public void UpdateProgress(WimOperationProgress progress)

@@ -12,8 +12,8 @@ internal sealed class SelectionInfoDialog : Form
         MinimizeBox = false;
         ShowInTaskbar = false;
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(620, 360);
-        MinimumSize = new Size(460, 280);
+        ClientSize = new Size(760, 540);
+        MinimumSize = new Size(520, 360);
         BackColor = ShellTheme.WindowBack;
         ForeColor = ShellTheme.TextColor;
 
