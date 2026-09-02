@@ -18,6 +18,7 @@ internal sealed class TaskbarApplicationContext : ApplicationContext
     private readonly int _sessionOwnerProcessId;
     private ShellTaskbarForm? _taskbar;
     private bool _isExiting;
+    private bool _powerActionPending;
 
     public TaskbarApplicationContext(int sessionOwnerProcessId = 0)
     {
@@ -80,14 +81,14 @@ internal sealed class TaskbarApplicationContext : ApplicationContext
         LaunchImagingManager();
     }
 
-    private void Taskbar_ShutdownRequested(object? sender, EventArgs e)
+    private async void Taskbar_ShutdownRequested(object? sender, EventArgs e)
     {
-        RequestSystemPowerAction(reboot: false);
+        await RequestSystemPowerActionAsync(reboot: false);
     }
 
-    private void Taskbar_RebootRequested(object? sender, EventArgs e)
+    private async void Taskbar_RebootRequested(object? sender, EventArgs e)
     {
-        RequestSystemPowerAction(reboot: true);
+        await RequestSystemPowerActionAsync(reboot: true);
     }
 
     private void Taskbar_FormClosed(object? sender, FormClosedEventArgs e)
@@ -261,6 +262,57 @@ internal sealed class TaskbarApplicationContext : ApplicationContext
                 "Imaging Manager",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
+        }
+    }
+
+    private async Task RequestSystemPowerActionAsync(bool reboot)
+    {
+        if (_powerActionPending)
+            return;
+
+        _powerActionPending = true;
+        try
+        {
+            MountedWimPowerProbeResult probe = await MountedWimPowerGuard.ProbeAsync();
+            if (!probe.Success)
+            {
+                DialogResult verifyResult = MessageBox.Show(
+                    _taskbar,
+                    "Imaging Manager could not verify whether WIM images are currently mounted.\n\n" +
+                    $"{probe.Error}\n\n" +
+                    $"Continue and {(reboot ? "restart" : "shut down")} anyway?",
+                    reboot ? "Restart - WIM Check Failed" : "Shutdown - WIM Check Failed",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2);
+
+                if (verifyResult != DialogResult.Yes)
+                    return;
+            }
+            else if (probe.Images.Count > 0)
+            {
+                bool imagingManagerAvailable = File.Exists(Path.Combine(AppContext.BaseDirectory, "Imaging.Manager.exe"));
+                using MountedWimPowerGuardDialog dialog = new(probe.Images, reboot, imagingManagerAvailable);
+                MountedWimPowerChoice choice = _taskbar != null
+                    ? dialog.ShowGuardDialog(_taskbar)
+                    : dialog.ShowGuardDialog();
+
+                if (choice == MountedWimPowerChoice.OpenImagingManager)
+                {
+                    User32.AllowSetForegroundWindow(User32.ASFW_ANY);
+                    LaunchImagingManager();
+                    return;
+                }
+
+                if (choice != MountedWimPowerChoice.ContinueAnyway)
+                    return;
+            }
+
+            RequestSystemPowerAction(reboot);
+        }
+        finally
+        {
+            _powerActionPending = false;
         }
     }
 
