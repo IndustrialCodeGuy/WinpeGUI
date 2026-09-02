@@ -15,11 +15,13 @@ public partial class MainForm : Form
     private readonly TemporaryDriveLetterService _temporaryDriveLetters = new();
     private readonly PartitionFormatService _partitionFormatter = new();
 
-    private SplitContainer _splitMain = null!;
     private FlowLayoutPanel _pnlDisks = null!;
     private Panel _rightPanel = null!;
-    private FlowLayoutPanel _pnlPartitions = null!;
-    private Label _txtDiskStatus = null!;
+    private Panel _pnlGlobalActions = null!;
+    private Panel _pnlContextActions = null!;
+    private Label _lblSelectionContext = null!;
+    private Panel? _mountedWimRow;
+    private FlowLayoutPanel? _pnlMountedWims;
     private Label _lblStatus = null!;
     private Button _btnCapture = null!;
     private Button _btnApply = null!;
@@ -32,9 +34,11 @@ public partial class MainForm : Form
     private Button _btnAddDrivers = null!;
     private Button _btnUnlock = null!;
     private Button _btnDeployWim = null!;
+    private Button _btnGetInfo = null!;
 
     private Panel? _selectedDiskTile;
     private Panel? _selectedPartitionTile;
+    private Panel? _selectedMountedWimTile;
     private IReadOnlyList<ImagingDiskInfo> _disks = Array.Empty<ImagingDiskInfo>();
     private readonly Dictionary<int, Image> _diskImagesBySize = new();
     private readonly Dictionary<(DriveVisualKind Kind, int Size), Image> _partitionImagesByKind = new();

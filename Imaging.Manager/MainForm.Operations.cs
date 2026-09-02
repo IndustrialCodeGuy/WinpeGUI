@@ -672,7 +672,7 @@ public partial class MainForm
             Activate();
         }
 
-        await RefreshMountedWimStateAsync();
+        await RefreshMountedWimStateAsync(result.Success ? mountDirectory : null);
 
         if (!result.Success)
         {
@@ -694,33 +694,44 @@ public partial class MainForm
     private async Task RefreshViewAsync()
     {
         int? selectedDiskNumber = GetSelectedDisk()?.DiskNumber;
+        string? selectedMountDirectory = GetSelectedMountedWim()?.MountDirectory;
         LoadDisks(selectedDiskNumber);
-        await RefreshMountedWimStateAsync();
+        if (!string.IsNullOrWhiteSpace(selectedMountDirectory))
+            RebuildMountedWimTiles(selectedMountDirectory);
+        await RefreshMountedWimStateAsync(selectedMountDirectory);
     }
 
-    private async Task RefreshMountedWimStateAsync()
+    private async Task RefreshMountedWimStateAsync(string? preferredMountDirectory = null)
     {
         if (_operationActive || IsDisposed)
             return;
 
+        string? selectedMountDirectory = preferredMountDirectory ?? GetSelectedMountedWim()?.MountDirectory;
         try
         {
             WimMountedImageInfoResult result = await _wimBackend.GetMountedImagesAsync(CancellationToken.None);
             if (result.Success)
+            {
                 _mountedWims = result.Images;
+                RebuildMountedWimTiles(selectedMountDirectory);
+            }
         }
         catch
         {
-            // Preserve the last known mount state if DISM inventory temporarily
-            // fails; an action will always re-query before servicing an image.
+            // Preserve the last known mounted-image row when DISM inventory
+            // temporarily fails. Refresh or the next servicing action can retry.
         }
 
         if (!IsDisposed)
             UpdateSelectedDiskPanel();
     }
 
-    private async Task<IReadOnlyList<WimMountedImageInfo>?> GetMountedWimsForActionAsync(string title)
+    private async Task<WimMountedImageInfo?> ResolveSelectedMountedWimForActionAsync(string title)
     {
+        WimMountedImageInfo? selected = GetSelectedMountedWim();
+        if (selected == null)
+            return null;
+
         WimMountedImageInfoResult result;
         UseWaitCursor = true;
         try
@@ -756,20 +767,22 @@ public partial class MainForm
         }
 
         _mountedWims = result.Images;
+        WimMountedImageInfo? current = _mountedWims.FirstOrDefault(image =>
+            string.Equals(image.MountDirectory, selected.MountDirectory, StringComparison.OrdinalIgnoreCase));
+        RebuildMountedWimTiles(current?.MountDirectory);
         UpdateSelectedDiskPanel();
 
-        if (_mountedWims.Count == 0)
+        if (current == null)
         {
             MessageBox.Show(
                 this,
-                "There are no mounted WIM images.",
+                "The selected WIM is no longer mounted. The mounted-image list has been refreshed.",
                 title,
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
-            return null;
         }
 
-        return _mountedWims;
+        return current;
     }
 
     private async Task UnmountWimAsync()
@@ -777,16 +790,15 @@ public partial class MainForm
         if (_operationActive)
             return;
 
-        IReadOnlyList<WimMountedImageInfo>? mountedWims = await GetMountedWimsForActionAsync("Unmount WIM");
-        if (mountedWims == null)
+        WimMountedImageInfo? selected = await ResolveSelectedMountedWimForActionAsync("Unmount WIM");
+        if (selected == null)
             return;
 
-        using UnmountWimDialog dialog = new(mountedWims);
+        using UnmountWimDialog dialog = new(new[] { selected });
         DialogResult choice = dialog.ShowDialog(this);
         if (choice != DialogResult.Yes && choice != DialogResult.No)
             return;
 
-        WimMountedImageInfo selected = dialog.SelectedImage;
         bool commitChanges = choice == DialogResult.Yes;
         await RunWimUnmountAsync(selected, commitChanges);
     }
@@ -853,33 +865,43 @@ public partial class MainForm
         if (_operationActive)
             return;
 
-        IReadOnlyList<WimMountedImageInfo>? mountedWims = await GetMountedWimsForActionAsync("Add Drivers");
-        if (mountedWims == null)
-            return;
+        WimMountedImageInfo? mountedWim = GetSelectedMountedWim();
+        ImagingPartitionInfo? partition = GetSelectedPartition();
 
-        IReadOnlyList<WimMountedImageInfo> writableWims = mountedWims.Where(static image => image.ReadWrite).ToArray();
-        if (writableWims.Count == 0)
+        string imageRoot;
+        string targetLabel;
+        bool changesRequireCommit;
+
+        if (mountedWim != null)
         {
-            MessageBox.Show(
-                this,
-                "The mounted WIM image is read-only. Drivers can only be added to a WIM mounted read/write.",
-                "Add Drivers",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
-            return;
+            WimMountedImageInfo? current = await ResolveSelectedMountedWimForActionAsync("Add Drivers");
+            if (current == null)
+                return;
+
+            if (!current.ReadWrite)
+            {
+                MessageBox.Show(
+                    this,
+                    "The selected WIM is mounted read-only. Drivers can only be added to a WIM mounted read/write.",
+                    "Add Drivers",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            imageRoot = current.MountDirectory;
+            targetLabel = $"Mounted WIM:\n{current.DisplayName}";
+            changesRequireCommit = true;
         }
-
-        WimMountedImageInfo target;
-        if (writableWims.Count == 1)
+        else if (partition != null && TryGetOfflineWindowsRoot(partition, out string offlineWindowsRoot))
         {
-            target = writableWims[0];
+            imageRoot = offlineWindowsRoot;
+            targetLabel = $"Offline Windows installation:\n{GetPartitionDisplayName(partition)} — {offlineWindowsRoot}";
+            changesRequireCommit = false;
         }
         else
         {
-            using MountedWimSelectionDialog select = new("Add Drivers", "Select the mounted WIM to service", writableWims);
-            if (select.ShowDialog(this) != DialogResult.OK)
-                return;
-            target = select.SelectedImage;
+            return;
         }
 
         string? driverFolder = RunExplorerFolderPicker("Select driver folder to add recursively");
@@ -892,7 +914,6 @@ public partial class MainForm
             driverFullPath = Path.GetFullPath(driverFolder);
             if (!Directory.Exists(driverFullPath))
                 throw new DirectoryNotFoundException($"The selected driver folder is no longer accessible: {driverFullPath}");
-
         }
         catch (Exception ex)
         {
@@ -900,9 +921,13 @@ public partial class MainForm
             return;
         }
 
+        string commitNote = changesRequireCommit
+            ? "\n\nThe changes remain pending until the WIM is unmounted with Commit."
+            : "\n\nThe drivers are added directly to the selected offline Windows installation.";
+
         DialogResult confirm = MessageBox.Show(
             this,
-            $"Add all INF driver packages from this folder and its subfolders?\n\nMounted WIM:\n{target.MountDirectory}\n\nDriver folder:\n{driverFullPath}\n\nThe changes remain pending until the WIM is unmounted with Commit.",
+            $"Add all INF driver packages from this folder and its subfolders?\n\n{targetLabel}\n\nDriver folder:\n{driverFullPath}{commitNote}",
             "Add Drivers",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Question,
@@ -910,10 +935,14 @@ public partial class MainForm
         if (confirm != DialogResult.Yes)
             return;
 
-        await RunAddDriversAsync(target, driverFullPath);
+        await RunAddDriversAsync(imageRoot, targetLabel, driverFullPath, changesRequireCommit);
     }
 
-    private async Task RunAddDriversAsync(WimMountedImageInfo image, string driverFolder)
+    private async Task RunAddDriversAsync(
+        string imageRoot,
+        string targetLabel,
+        string driverFolder,
+        bool changesRequireCommit)
     {
         _operationActive = true;
         UpdateSelectedDiskPanel();
@@ -921,8 +950,8 @@ public partial class MainForm
 
         using WimServicingProgressDialog progressDialog = new(
             "Add Drivers",
-            "Adding drivers to mounted WIM",
-            driverFolder);
+            "Adding drivers to offline Windows image",
+            imageRoot);
         progressDialog.Show(this);
 
         Progress<WimOperationProgress> progress = new(update => progressDialog.UpdateProgress(update));
@@ -930,7 +959,7 @@ public partial class MainForm
         try
         {
             result = await _wimBackend.AddDriversAsync(
-                image.MountDirectory,
+                imageRoot,
                 driverFolder,
                 true,
                 progress,
@@ -959,9 +988,12 @@ public partial class MainForm
             return;
         }
 
+        string successNote = changesRequireCommit
+            ? "\n\nUnmount the WIM with Commit to save the changes."
+            : string.Empty;
         MessageBox.Show(
             this,
-            $"The driver packages were added successfully.\n\nMounted WIM: {image.MountDirectory}\n\nUnmount the WIM with Commit to save the changes.",
+            $"The driver packages were added successfully.\n\n{targetLabel}{successNote}",
             "Add Drivers",
             MessageBoxButtons.OK,
             MessageBoxIcon.Information);

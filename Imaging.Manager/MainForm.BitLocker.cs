@@ -8,7 +8,8 @@ public partial class MainForm
 {
     private ImagingBitLockerVolumeInfo? GetBitLockerVolumeForPartition(ImagingPartitionInfo partition)
     {
-        ImagingDiskInfo? disk = GetSelectedDisk();
+        ImagingDiskInfo? disk = _disks.FirstOrDefault(candidate => candidate.Partitions.Any(p => ReferenceEquals(p, partition)))
+            ?? GetSelectedDisk();
         if (disk == null || partition.DriveLetters.Count == 0)
             return null;
 
