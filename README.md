@@ -115,29 +115,40 @@ Features whose supporting WinPE components are absent may be unavailable or fail
 
 ## Imaging Manager
 
-Imaging Manager is a companion application for physical-disk, partition, and WIM-file operations from WinPE. Its selection model intentionally separates whole-disk FFU/deployment operations from partition-scoped WIM operations while also exposing file-based WIM servicing actions that do not require a disk selection.
+Imaging Manager is a companion application for physical-disk, partition, and WIM-file operations from WinPE. The main view uses a Disk Management-style layout: each physical disk has its own compact disk selector showing size and online/offline state beside a proportional partition strip, followed by a separate strip for currently mounted WIM images. Only one disk, partition, or mounted WIM owns the active selection at a time.
 
-The action column currently contains:
+The main command layout is split into two full-width strips:
+
+- A **global command strip** above the disks contains **Mount WIM** and **Export WIM** on the left, with **Refresh** pinned to the right. These commands do not depend on the active disk/partition/WIM selection and leave room for additional global actions later.
+- A **contextual command strip** below the disk/WIM selector shows the current target on the left and only the actions that apply to that selection on the right.
+
+The contextual actions are:
 
 ```text
+Disk selected:
+Get Info
 Capture FFU
 Apply FFU
-Mount WIM
-Unmount WIM
+Deploy WIM
+
+Partition selected:
+Get Info
 Capture WIM
 Apply WIM
-Deploy WIM
-Export WIM
+Add Drivers    (recognized offline Windows installation only)
+Unlock         (locked BitLocker partition only)
+
+Mounted WIM selected:
+Get Info
+Unmount WIM
 Add Drivers
-Unlock
-Refresh
 ```
 
-Availability changes with the current disk/partition selection, BitLocker state, and DISM mounted-image inventory.
+Availability still follows the current disk/partition/mounted-WIM selection, BitLocker state, and DISM mounted-image inventory. A read-only mounted WIM keeps **Add Drivers** visible but disabled. **Get Info** opens the detailed information for the current selection instead of keeping a permanent information pane on screen.
 
 ### Physical disk and FFU operations
 
-When a physical disk is selected, Imaging Manager exposes physical-disk information and FFU operations:
+Each physical disk is shown as a compact selector beside its partition strip. When the disk selector itself is active, Imaging Manager exposes whole-disk FFU/deployment operations:
 
 - Capture FFU using DISM `/Capture-FFU`.
 - Apply FFU using DISM `/Apply-FFU`.
@@ -149,9 +160,9 @@ Imaging Manager checks BitLocker state before FFU capture and strongly warns whe
 
 ### Partition selection and BitLocker integration
 
-Selecting a partition changes the active partition scope. FFU actions are disabled for the partition selection, while partition-scoped WIM capture/apply operations can target that volume.
+Every disk row shows its partitions at the same time. Partition widths are proportional to partition size with a minimum clickable width for small EFI/MSR/Recovery partitions, without a per-disk or overall horizontal scrollbar. Each tile begins with the partition number (and drive letter when assigned). Lettered partitions show total and used space on separate lines; unlettered partitions show total size only. Selecting a partition gives that partition the single active highlight and changes the active partition scope: FFU/deployment actions are disabled, while partition-scoped WIM capture/apply operations can target that volume.
 
-Partition tiles use the same BitLocker-aware drive icon states used by the file manager and BitLocker Manager, including locked, unlocked/protected, protection-off, system-drive, and unknown-state variants where applicable.
+Disk and partition selectors retain the shell's familiar small system-resource icons. Partition tiles use the same BitLocker-aware drive icon states used by the file manager and BitLocker Manager, including locked, unlocked/protected, protection-off, system-drive, and unknown-state variants where applicable.
 
 The **Unlock** action reuses `BitLocker.Unlock.exe`; Imaging Manager does not duplicate password/recovery-key handling.
 
@@ -270,9 +281,7 @@ Once DISM begins the mount, the operation is intentionally not exposed as cancel
 
 ### Unmount WIM
 
-Unmount WIM uses DISM's current mounted-image inventory, so it can recognize WIMs mounted before Imaging Manager was started or mounted by another process.
-
-If more than one WIM is mounted, Imaging Manager allows the target to be selected.
+The mounted-WIM strip is populated from DISM's current mounted-image inventory, so it can recognize WIMs mounted before Imaging Manager was started or mounted by another process. Select the mounted-WIM tile to service, then use **Unmount WIM**. No second WIM-selection dialog is used.
 
 The unmount dialog offers:
 
@@ -284,15 +293,20 @@ Read-only mounts can be discarded but cannot be committed.
 
 ### Add Drivers
 
-Add Drivers is enabled whenever DISM reports at least one mounted WIM. The selected target must be a writable mounted WIM.
+Add Drivers can service either of two offline Windows targets:
 
-Imaging Manager selects a driver folder and services the mounted image with DISM `/Add-Driver /Driver:<folder> /Recurse`, recursively adding supported INF driver packages.
+- A selected mounted WIM that is mounted read/write.
+- A selected accessible partition that contains a recognizable offline Windows installation (`Windows\System32\Config\SYSTEM`).
+
+Imaging Manager selects a driver folder and services the selected offline image with DISM `/Image:<offline-root> /Add-Driver /Driver:<folder> /Recurse`, recursively adding supported INF driver packages.
 
 Imaging Manager does not use `/ForceUnsigned`. Unsigned packages therefore remain subject to DISM's normal validation behavior.
 
-Driver changes remain pending in the mounted image until the WIM is unmounted with **Commit**. Choosing **Discard** removes those pending changes.
+For a mounted WIM, driver changes remain pending until the WIM is unmounted with **Commit**; choosing **Discard** removes them. For an offline installed Windows partition, DISM services that installation directly and there is no separate WIM commit step.
 
-### Refresh and mounted-image state
+### Get Info, Refresh, and mounted-image state
+
+**Get Info** opens the detailed disk, partition, or mounted-WIM information for the current selection. This keeps the main window focused on selection and operations instead of permanently displaying verbose status text.
 
 **Refresh** re-queries both the physical-disk inventory and DISM's mounted-WIM inventory. This allows Imaging Manager to recognize WIM mount/unmount activity that occurred outside the application.
 
@@ -549,6 +563,9 @@ Important scenarios include:
 - BitLocker volume locking.
 - Imaging Manager presence/absence in the Start menu based on whether `Imaging.Manager.exe` is deployed.
 - Imaging Manager physical-disk and partition enumeration.
+- Disk Management-style multi-disk rows, online/offline disk status, proportional partition sizing, partition used-space display, compact disk/partition icons, and four-disk-plus-mounted-WIM default-height layout.
+- Disk, partition, and mounted-WIM selection exclusivity plus Get Info behavior.
+- Full-width global command strip with Refresh pinned right and selection-driven contextual command strip.
 - FFU capture to a different physical disk.
 - FFU apply and destructive-target confirmation.
 - FFU capture warnings for encrypted, partially encrypted, and BitLocker-status-unknown disks.
@@ -570,10 +587,11 @@ Important scenarios include:
 - Deploy WIM boot configuration and Windows RE population/registration.
 - Export WIM, including multi-index selection, replacement confirmation, and cancellation cleanup.
 - Mount WIM to an empty folder.
-- Recognition of WIMs mounted outside Imaging Manager.
+- Recognition of WIMs mounted outside Imaging Manager and mounted-WIM strip selection.
 - Unmount WIM with Commit and Discard.
 - Read-only mounted-WIM handling.
-- Add Drivers against a writable mounted WIM, including recursive INF discovery.
+- Add Drivers against a selected writable mounted WIM, including recursive INF discovery and read-only disabled-state behavior.
+- Add Drivers directly against a selected offline installed-Windows partition.
 - Mounted-image refresh behavior.
 - Imaging Manager BitLocker-aware partition icons and integrated Unlock action.
 - Temporary drive-letter cleanup after success, failure, and cancellation.
