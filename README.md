@@ -638,6 +638,8 @@ Important scenarios include:
 
 ## License
 
+Copyright © 2026 Dan Michel. https://github.com/IndustrialCodeGuy/WinpeGUI
+
 WinPE GUI Shell is source-available under the PolyForm Noncommercial License 1.0.0.
 
 Noncommercial use is permitted under the license. Commercial or other for-profit use requires separate permission from the copyright holder.
