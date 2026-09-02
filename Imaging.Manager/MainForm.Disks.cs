@@ -919,22 +919,16 @@ public partial class MainForm
         if (!string.IsNullOrWhiteSpace(disk.SerialNumber)) text.AppendLine($"Serial:     {disk.SerialNumber}");
         text.AppendLine($"Device:     {disk.DevicePath}");
         text.AppendLine();
-        text.AppendLine("FFU scope: Entire physical disk");
-        text.AppendLine("Deploy WIM: Clean/repartition entire physical disk");
-        text.AppendLine();
         text.AppendLine("BitLocker / FFU capture");
-        FfuCaptureAssessment assessment = FfuCaptureAssessment.Evaluate(disk);
         if (!disk.BitLockerStatusAvailable)
         {
             text.AppendLine("  BitLocker status unavailable; encryption state could not be verified.");
             if (!string.IsNullOrWhiteSpace(disk.BitLockerStatusError))
                 text.AppendLine($"  Status error: {disk.BitLockerStatusError}");
-            text.AppendLine("  FFU capture readiness: Verify encryption before capture");
         }
         else if (disk.BitLockerVolumes.Count == 0)
         {
             text.AppendLine("  No encrypted BitLocker volume detected.");
-            text.AppendLine("  FFU capture readiness: Ready");
         }
         else
         {
@@ -946,10 +940,6 @@ public partial class MainForm
                 string encryptionType = string.IsNullOrWhiteSpace(volume.EncryptionType) ? string.Empty : $"  {volume.EncryptionType}";
                 text.AppendLine($"  {volume.MountPoint.TrimEnd('\\')}  {conversion}  {percent}{encryptionType}  {lockText}");
             }
-
-            text.AppendLine(assessment.RequiresEncryptionWarning
-                ? "  FFU capture readiness: Decrypt first (recommended)"
-                : "  FFU capture readiness: Ready");
         }
 
         return text.ToString().TrimEnd();
@@ -958,7 +948,7 @@ public partial class MainForm
     private string BuildPartitionDetails(ImagingPartitionInfo partition)
     {
         StringBuilder text = new();
-        text.AppendLine($"Partition {partition.PartitionNumber}");
+        text.AppendLine($"Partition:  {partition.PartitionNumber}");
 
         string drives = partition.DriveLetters.Count == 0
             ? "None"
@@ -975,7 +965,6 @@ public partial class MainForm
         ImagingBitLockerVolumeInfo? bitLocker = GetBitLockerVolumeForPartition(partition);
         if (bitLocker?.IsBitLockerCapable == true)
         {
-            text.AppendLine();
             text.AppendLine("BitLocker");
             string state = bitLocker.IsLocked switch
             {
