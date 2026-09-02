@@ -27,6 +27,7 @@ Windows and Windows PE are trademarks of the Microsoft group of companies. These
 - Imaging Manager integration in the Start menu when `Imaging.Manager.exe` is deployed alongside the shell.
 - Light and dark shell themes.
 - Windowless supervisor that starts and monitors the taskbar and file-manager processes.
+- Shutdown/reboot guard that detects registered mounted WIMs and prompts to resolve them before leaving WinPE.
 - Purpose-built WinPE shell architecture with minimal runtime dependencies.
 
 ## Architecture
@@ -119,7 +120,7 @@ Imaging Manager is a companion application for physical-disk, partition, and WIM
 
 The main command layout is split into two full-width strips:
 
-- A **global command strip** above the disks contains **Mount WIM** and **Export WIM** on the left, with **Refresh** pinned to the right. These commands do not depend on the active disk/partition/WIM selection and leave room for additional global actions later.
+- A **global command strip** above the disks contains **Mount WIM** and **Export WIM** on the left, with **Refresh** pinned to the right. **Cleanup Mounts** remains visible on the left as a system-wide recovery action and is enabled only when DISM reports one or more **Invalid** mounted WIMs. These commands do not depend on the active disk/partition/WIM selection and leave room for additional global actions later.
 - A **contextual command strip** below the disk/WIM selector shows the current target on the left and only the actions that apply to that selection on the right.
 
 The contextual actions are:
@@ -138,10 +139,17 @@ Apply WIM
 Add Drivers    (recognized offline Windows installation only)
 Unlock         (locked BitLocker partition only)
 
-Mounted WIM selected:
+Mounted WIM selected (status OK):
 Get Info
 Unmount WIM
 Add Drivers
+
+Mounted WIM selected (Needs Remount):
+Get Info
+Remount WIM
+
+Mounted WIM selected (Invalid):
+Get Info
 ```
 
 Availability still follows the current disk/partition/mounted-WIM selection, BitLocker state, and DISM mounted-image inventory. A read-only mounted WIM keeps **Add Drivers** visible but disabled. **Get Info** opens the detailed information for the current selection instead of keeping a permanent information pane on screen.
@@ -281,15 +289,27 @@ Once DISM begins the mount, the operation is intentionally not exposed as cancel
 
 ### Unmount WIM
 
-The mounted-WIM strip is populated from DISM's current mounted-image inventory, so it can recognize WIMs mounted before Imaging Manager was started or mounted by another process. Select the mounted-WIM tile to service, then use **Unmount WIM**. No second WIM-selection dialog is used.
+The mounted-WIM strip is populated from DISM's current mounted-image inventory, so it can recognize WIMs mounted before Imaging Manager was started or mounted by another process. Imaging Manager also retains DISM's mounted-image **Status** value and uses it to expose the appropriate contextual recovery action. No second WIM-selection dialog is used.
+
+Healthy mounted WIMs show the normal **Unmount WIM** and **Add Drivers** actions. A read-only healthy mount keeps **Add Drivers** visible but disabled. If DISM reports **Needs Remount**, the normal servicing actions are replaced with **Remount WIM**, which runs DISM `/Remount-Image /MountDir:<mount-directory>`. If DISM reports **Invalid**, the selected tile retains only **Get Info** while the global top strip exposes **Cleanup Mounts**. Abnormal statuses are appended to the mounted-WIM tile so they are visible without opening Get Info.
 
 The unmount dialog offers:
 
-- **Commit** — save pending changes with DISM `/Unmount-Image /Commit /CheckIntegrity`.
+- **Commit** — save pending changes to the WIM first, then release the mount. Imaging Manager performs this as two separately verified DISM stages: `/Commit-Image /MountDir:<mount-directory> /CheckIntegrity`, followed only after a successful commit by `/Unmount-Image /MountDir:<mount-directory> /Discard`.
 - **Discard** — unmount without preserving pending changes.
 - **Cancel**.
 
+Separating commit from unmount prevents an open file or folder from making the save result ambiguous. Once `/Commit-Image` succeeds, Imaging Manager records the mount as **Committed — pending unmount** before attempting to release it. If the release fails, the WIM is already saved, the mounted-WIM tile exposes **Finish Unmount** instead of another Commit path, and retrying performs only the unmount/discard stage. The pending state is retained in the WinPE temporary directory so closing and reopening Imaging Manager in the same PE session does not accidentally offer another commit. It is reconciled against DISM's mounted-image inventory on startup and refresh.
+
+Imaging Manager also recognizes DISM error `0xc142011d` from an older or externally initiated partial unmount/commit attempt. Because DISM indicates that a previous commit may already have succeeded, Imaging Manager warns against committing again and offers an explicit unmount-only recovery path rather than automatically repeating the commit.
+
 Read-only mounts can be discarded but cannot be committed.
+
+### Mounted-WIM recovery
+
+A mounted WIM reported by DISM as **Needs Remount** can be recovered with **Remount WIM**. This uses DISM `/Remount-Image` against the selected mount directory and refreshes the mounted-image inventory afterward.
+
+**Cleanup Mounts** remains visible in the global top strip and is enabled when DISM reports one or more mounted WIMs as **Invalid**. DISM `/Cleanup-Mountpoints` is system-wide rather than scoped to a single selected mount: it removes resources associated with corrupted mounted images, while leaving healthy mounts in place and not deleting mounts that DISM considers recoverable with `/Remount-Image`. Imaging Manager therefore refreshes the mounted-image inventory before running cleanup, requires an explicit warning/confirmation, and refreshes the inventory again afterward.
 
 ### Add Drivers
 
@@ -302,11 +322,13 @@ Imaging Manager selects a driver folder and services the selected offline image 
 
 Imaging Manager does not use `/ForceUnsigned`. Unsigned packages therefore remain subject to DISM's normal validation behavior.
 
-For a mounted WIM, driver changes remain pending until the WIM is unmounted with **Commit**; choosing **Discard** removes them. For an offline installed Windows partition, DISM services that installation directly and there is no separate WIM commit step.
+For a mounted WIM, driver changes remain pending until **Commit** saves them to the WIM; the subsequent unmount stage only releases the already-saved mount. Choosing **Discard** without first committing removes pending changes. For an offline installed Windows partition, DISM services that installation directly and there is no separate WIM commit step.
 
 ### Get Info, Refresh, and mounted-image state
 
 **Get Info** opens the detailed disk, partition, or mounted-WIM information for the current selection. This keeps the main window focused on selection and operations instead of permanently displaying verbose status text.
+
+For disks and partitions, the details window supplements the existing Win32/WMI inventory with the native `MSFT_Disk` and `MSFT_Partition` storage-provider data used by the Windows Storage stack. Disk details include identity, model/firmware, size/allocation, partition style, bus/provisioning type, operational/health state, online/read-only/system/boot flags, sector sizes, free extent, unique ID/GUID/signature, and location where available. Partition details include disk/partition identity, drive/access paths, size/offset, GPT/MBR type, operational/transition state, read-only/offline/system/boot/active/hidden attributes, volume capacity/filesystem information for accessible lettered volumes, and BitLocker details. The application queries these providers directly and does not require PowerShell; if the Storage WMI provider is unavailable in a minimal PE image, the dialog falls back to the information available from the existing Win32 inventory.
 
 **Refresh** re-queries both the physical-disk inventory and DISM's mounted-WIM inventory. This allows Imaging Manager to recognize WIM mount/unmount activity that occurred outside the application.
 
@@ -554,6 +576,7 @@ Important scenarios include:
 - Starting the shell through `winpeshl.ini`.
 - Supervisor, taskbar, and file-manager startup and restart behavior.
 - Shutdown and reboot from the shell.
+- Shutdown/reboot mounted-WIM guard, including Open Imaging Manager, Continue Anyway, and failed-inventory warning paths.
 - Operation with the intended `WinPE-WMI` and `WinPE-SecureStartup` components.
 - Behavior when required optional components are absent.
 - BitLocker status and management.
@@ -588,7 +611,11 @@ Important scenarios include:
 - Export WIM, including multi-index selection, replacement confirmation, and cancellation cleanup.
 - Mount WIM to an empty folder.
 - Recognition of WIMs mounted outside Imaging Manager and mounted-WIM strip selection.
-- Unmount WIM with Commit and Discard.
+- Mounted-WIM abnormal-status display, `Needs Remount` recovery, and invalid-mount cleanup behavior.
+- Unmount WIM with separate Commit-Image and release stages, including an open-handle failure after a successful commit.
+- **Committed — pending unmount** persistence/recovery and the **Finish Unmount** path after closing/reopening Imaging Manager in the same PE session.
+- Detection/recovery guidance for DISM `0xc142011d` partial-unmount commit errors.
+- Unmount WIM with Discard.
 - Read-only mounted-WIM handling.
 - Add Drivers against a selected writable mounted WIM, including recursive INF discovery and read-only disabled-state behavior.
 - Add Drivers directly against a selected offline installed-Windows partition.
@@ -610,8 +637,6 @@ Important scenarios include:
 - Degraded/fallback behavior when user-supplied Windows image resources are intentionally omitted.
 
 ## License
-
-Copyright © 2026 Dan Michel. https://github.com/IndustrialCodeGuy/WinpeGUI
 
 WinPE GUI Shell is source-available under the PolyForm Noncommercial License 1.0.0.
 
