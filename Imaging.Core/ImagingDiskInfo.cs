@@ -12,6 +12,11 @@ public sealed class ImagingDiskInfo
     public string SerialNumber { get; init; } = string.Empty;
     public ulong SizeBytes { get; init; }
     public bool? IsOffline { get; init; }
+    public ImagingDiskStorageInfo? StorageInfo { get; init; }
+    public bool StorageInfoAvailable { get; init; }
+    public string StorageInfoError { get; init; } = string.Empty;
+    public bool PartitionStorageInfoAvailable { get; init; }
+    public string PartitionStorageInfoError { get; init; } = string.Empty;
     public IReadOnlyList<ImagingPartitionInfo> Partitions { get; init; } = Array.Empty<ImagingPartitionInfo>();
     public IReadOnlyList<ImagingBitLockerVolumeInfo> BitLockerVolumes { get; init; } = Array.Empty<ImagingBitLockerVolumeInfo>();
     public bool BitLockerStatusAvailable { get; init; }
@@ -31,15 +36,73 @@ public sealed class ImagingDiskInfo
     }
 }
 
+public sealed class ImagingDiskStorageInfo
+{
+    public string Path { get; init; } = string.Empty;
+    public string Location { get; init; } = string.Empty;
+    public string FriendlyName { get; init; } = string.Empty;
+    public string UniqueId { get; init; } = string.Empty;
+    public string UniqueIdFormat { get; init; } = string.Empty;
+    public string SerialNumber { get; init; } = string.Empty;
+    public string FirmwareVersion { get; init; } = string.Empty;
+    public string Manufacturer { get; init; } = string.Empty;
+    public string Model { get; init; } = string.Empty;
+    public ulong SizeBytes { get; init; }
+    public ulong AllocatedSizeBytes { get; init; }
+    public uint LogicalSectorSize { get; init; }
+    public uint PhysicalSectorSize { get; init; }
+    public ulong LargestFreeExtentBytes { get; init; }
+    public uint NumberOfPartitions { get; init; }
+    public string ProvisioningType { get; init; } = string.Empty;
+    public string OperationalStatus { get; init; } = string.Empty;
+    public string HealthStatus { get; init; } = string.Empty;
+    public string BusType { get; init; } = string.Empty;
+    public string PartitionStyle { get; init; } = string.Empty;
+    public uint? Signature { get; init; }
+    public string Guid { get; init; } = string.Empty;
+    public bool? IsOffline { get; init; }
+    public string OfflineReason { get; init; } = string.Empty;
+    public bool? IsReadOnly { get; init; }
+    public bool? IsSystem { get; init; }
+    public bool? IsClustered { get; init; }
+    public bool? IsBoot { get; init; }
+    public bool? BootFromDisk { get; init; }
+}
+
 public sealed class ImagingPartitionInfo
 {
     public int PartitionNumber { get; init; }
     public string DeviceId { get; init; } = string.Empty;
     public string Type { get; init; } = string.Empty;
     public ulong SizeBytes { get; init; }
+    public ulong StartingOffsetBytes { get; init; }
     public bool BootPartition { get; init; }
     public bool PrimaryPartition { get; init; }
     public IReadOnlyList<string> DriveLetters { get; init; } = Array.Empty<string>();
+    public ImagingPartitionStorageInfo? StorageInfo { get; init; }
+}
+
+public sealed class ImagingPartitionStorageInfo
+{
+    public int DiskNumber { get; init; }
+    public int PartitionNumber { get; init; }
+    public string DriveLetter { get; init; } = string.Empty;
+    public IReadOnlyList<string> AccessPaths { get; init; } = Array.Empty<string>();
+    public string OperationalStatus { get; init; } = string.Empty;
+    public string TransitionState { get; init; } = string.Empty;
+    public ulong SizeBytes { get; init; }
+    public ulong OffsetBytes { get; init; }
+    public string MbrType { get; init; } = string.Empty;
+    public string GptType { get; init; } = string.Empty;
+    public string Guid { get; init; } = string.Empty;
+    public bool? IsReadOnly { get; init; }
+    public bool? IsOffline { get; init; }
+    public bool? IsSystem { get; init; }
+    public bool? IsBoot { get; init; }
+    public bool? IsActive { get; init; }
+    public bool? IsHidden { get; init; }
+    public bool? IsShadowCopy { get; init; }
+    public bool? NoDefaultDriveLetter { get; init; }
 }
 
 public sealed class ImagingBitLockerVolumeInfo

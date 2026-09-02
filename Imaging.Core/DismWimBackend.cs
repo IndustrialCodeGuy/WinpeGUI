@@ -140,24 +140,67 @@ public sealed class DismWimBackend
         return RunAsync(arguments, progress, cancellationToken);
     }
 
-    public Task<WimOperationResult> UnmountAsync(
+    public Task<WimOperationResult> CommitAsync(
         string mountDirectory,
-        bool commitChanges,
         IProgress<WimOperationProgress>? progress,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(mountDirectory);
 
         string mountFullPath = Path.GetFullPath(mountDirectory);
-        List<string> arguments = new()
+        string[] arguments =
+        {
+            "/Commit-Image",
+            $"/MountDir:{mountFullPath}",
+            "/CheckIntegrity"
+        };
+
+        return RunAsync(arguments, progress, cancellationToken);
+    }
+
+    public Task<WimOperationResult> UnmountDiscardAsync(
+        string mountDirectory,
+        IProgress<WimOperationProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(mountDirectory);
+
+        string mountFullPath = Path.GetFullPath(mountDirectory);
+        string[] arguments =
         {
             "/Unmount-Image",
             $"/MountDir:{mountFullPath}",
-            commitChanges ? "/Commit" : "/Discard"
+            "/Discard"
         };
 
-        if (commitChanges)
-            arguments.Add("/CheckIntegrity");
+        return RunAsync(arguments, progress, cancellationToken);
+    }
+
+    public Task<WimOperationResult> RemountAsync(
+        string mountDirectory,
+        IProgress<WimOperationProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(mountDirectory);
+
+        string mountFullPath = Path.GetFullPath(mountDirectory);
+        string[] arguments =
+        {
+            "/Remount-Image",
+            $"/MountDir:{mountFullPath}"
+        };
+
+        return RunAsync(arguments, progress, cancellationToken);
+    }
+
+    public Task<WimOperationResult> CleanupMountpointsAsync(
+        IProgress<WimOperationProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        string[] arguments =
+        {
+            "/Cleanup-Mountpoints"
+        };
 
         return RunAsync(arguments, progress, cancellationToken);
     }
