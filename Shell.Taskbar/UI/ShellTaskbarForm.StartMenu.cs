@@ -118,8 +118,7 @@ namespace Shell.Taskbar.UI
 
             if (_showImagingManagerStartMenu)
             {
-                if (!_showBitLockerManagerStartMenu)
-                    menu.Items.Add(MakeStartMenuSeparator());
+                menu.Items.Add(MakeStartMenuSeparator());
 
                 string imagingManagerPath = Path.Combine(
                     AppContext.BaseDirectory,
