@@ -163,25 +163,25 @@ public sealed class DismWimBackend
     }
 
     public Task<WimOperationResult> AddDriversAsync(
-        string mountDirectory,
+        string imagePath,
         string driverPath,
         bool recurse,
         IProgress<WimOperationProgress>? progress,
         CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(mountDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(imagePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(driverPath);
 
-        string mountFullPath = Path.GetFullPath(mountDirectory);
+        string imageFullPath = Path.GetFullPath(imagePath);
         string driverFullPath = Path.GetFullPath(driverPath);
-        if (!Directory.Exists(mountFullPath))
-            throw new DirectoryNotFoundException($"The WIM mount folder is not accessible: {mountFullPath}");
+        if (!Directory.Exists(imageFullPath))
+            throw new DirectoryNotFoundException($"The offline Windows image is not accessible: {imageFullPath}");
         if (!Directory.Exists(driverFullPath) && !File.Exists(driverFullPath))
             throw new FileNotFoundException("The driver source was not found.", driverFullPath);
 
         List<string> arguments = new()
         {
-            $"/Image:{mountFullPath}",
+            $"/Image:{imageFullPath}",
             "/Add-Driver",
             $"/Driver:{driverFullPath}"
         };

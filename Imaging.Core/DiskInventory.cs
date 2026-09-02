@@ -14,6 +14,7 @@ public sealed class DiskInventory
         BitLockerStatusSnapshot bitLockerStatus = GetBitLockerVolumesBestEffort();
         IReadOnlyList<BitLockerVolumeInfo> bitLockerVolumes = bitLockerStatus.Volumes;
         Dictionary<int, List<ImagingPartitionInfo>> partitionsByDisk = GetPartitions();
+        Dictionary<int, bool> offlineByDisk = GetDiskOfflineStatesBestEffort();
         List<ImagingDiskInfo> disks = new();
 
         using ManagementObjectSearcher searcher = new(
@@ -53,6 +54,7 @@ public sealed class DiskInventory
                     MediaType = Convert.ToString(disk["MediaType"])?.Trim() ?? string.Empty,
                     SerialNumber = Convert.ToString(disk["SerialNumber"])?.Trim() ?? string.Empty,
                     SizeBytes = ReadUInt64(disk["Size"]),
+                    IsOffline = offlineByDisk.TryGetValue(diskNumber, out bool isOffline) ? isOffline : null,
                     Partitions = partitions.OrderBy(static p => p.PartitionNumber).ToArray(),
                     BitLockerVolumes = diskBitLockerVolumes,
                     BitLockerStatusAvailable = bitLockerStatus.Available,
@@ -62,6 +64,34 @@ public sealed class DiskInventory
         }
 
         return disks.OrderBy(static d => d.DiskNumber).ToArray();
+    }
+
+    private static Dictionary<int, bool> GetDiskOfflineStatesBestEffort()
+    {
+        Dictionary<int, bool> states = new();
+        try
+        {
+            using ManagementObjectSearcher searcher = new(
+                @"root\Microsoft\Windows\Storage",
+                "SELECT Number, IsOffline FROM MSFT_Disk");
+            using ManagementObjectCollection results = searcher.Get();
+
+            foreach (ManagementObject disk in results.Cast<ManagementObject>())
+            {
+                using (disk)
+                {
+                    int number = ReadInt32(disk["Number"]);
+                    states[number] = ReadBoolean(disk["IsOffline"]);
+                }
+            }
+        }
+        catch
+        {
+            // Older/minimal WinPE images may not expose the Storage WMI provider.
+            // Leave the state unknown rather than failing the disk inventory.
+        }
+
+        return states;
     }
 
     public static ImagingDiskInfo? FindDiskForPath(IEnumerable<ImagingDiskInfo> disks, string? path)

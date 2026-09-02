@@ -11,6 +11,7 @@ public sealed class ImagingDiskInfo
     public string MediaType { get; init; } = string.Empty;
     public string SerialNumber { get; init; } = string.Empty;
     public ulong SizeBytes { get; init; }
+    public bool? IsOffline { get; init; }
     public IReadOnlyList<ImagingPartitionInfo> Partitions { get; init; } = Array.Empty<ImagingPartitionInfo>();
     public IReadOnlyList<ImagingBitLockerVolumeInfo> BitLockerVolumes { get; init; } = Array.Empty<ImagingBitLockerVolumeInfo>();
     public bool BitLockerStatusAvailable { get; init; }
