@@ -919,7 +919,7 @@ public partial class MainForm
         if (!string.IsNullOrWhiteSpace(disk.SerialNumber)) text.AppendLine($"Serial:     {disk.SerialNumber}");
         text.AppendLine($"Device:     {disk.DevicePath}");
         text.AppendLine();
-        text.AppendLine("BitLocker / FFU capture");
+        text.AppendLine("BitLocker");
         if (!disk.BitLockerStatusAvailable)
         {
             text.AppendLine("  BitLocker status unavailable; encryption state could not be verified.");
@@ -972,7 +972,7 @@ public partial class MainForm
                 false => bitLocker.VisualState == BitLockerVisualState.ProtectionOff ? "Unlocked · Protection off" : "Unlocked",
                 _ => "Status unknown"
             };
-            text.AppendLine($"Status:     {state}");
+            text.AppendLine($"BitLocker:  {state}");
             if (bitLocker.EncryptionPercentage.HasValue)
                 text.AppendLine($"Encrypted:  {bitLocker.EncryptionPercentage.Value}%");
             if (!string.IsNullOrWhiteSpace(bitLocker.ConversionStatus))
