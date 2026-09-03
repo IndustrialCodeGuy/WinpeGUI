@@ -117,25 +117,27 @@ internal class ImagingProgressDialogBase : Form
 
         _cancelConfirmation = cancelConfirmation;
         _cancelDialogTitle = cancelDialogTitle;
-        ClientSize = new Size(
-            ClientWidth,
-            cancelConfirmation == null
-                ? contentBottom + BottomMargin
-                : buttonTop + ShellDialogChrome.ButtonHeight + BottomMargin);
 
         if (cancelConfirmation != null)
         {
             _cancelButton = new Button
             {
-                Left = ClientWidth - ContentRight - ShellDialogChrome.ButtonWidth,
                 Top = buttonTop,
+                Font = Font,
                 Text = "Cancel"
             };
-            ShellDialogChrome.ApplyStandardButton(_cancelButton);
+            ShellDialogChrome.ApplyTextSafeButton(_cancelButton);
+            _cancelButton.Left = ClientWidth - ContentRight - _cancelButton.Width;
             _cancelButton.Click += CancelButton_Click;
             CancelButton = _cancelButton;
             Controls.Add(_cancelButton);
         }
+
+        ClientSize = new Size(
+            ClientWidth,
+            _cancelButton == null
+                ? contentBottom + BottomMargin
+                : buttonTop + _cancelButton.Height + BottomMargin);
     }
 
     public event EventHandler? CancelRequested;

@@ -119,20 +119,27 @@ internal abstract class ImagingConfirmationDialogBase : Form
         string text,
         DialogResult dialogResult,
         int width = ShellDialogChrome.ButtonWidth,
-        bool enabled = true) =>
-        new()
+        bool enabled = true)
+    {
+        Button button = new()
         {
-            Width = width,
-            Height = ShellDialogChrome.ButtonHeight,
+            Font = Font,
             Text = text,
             DialogResult = dialogResult,
             Enabled = enabled
         };
+        ShellDialogChrome.ApplyTextSafeButton(button, width);
+        return button;
+    }
 
     protected void FinishLayout(Button[] rightButtons, Button? leftButton = null, int gapBefore = 6)
     {
         int buttonTop = _nextTop + gapBefore;
         int right = ClientSize.Width - ContentRight;
+        int buttonRowHeight = leftButton?.Height ?? 0;
+
+        foreach (Button button in rightButtons)
+            buttonRowHeight = Math.Max(buttonRowHeight, button.Height);
 
         for (int i = rightButtons.Length - 1; i >= 0; i--)
         {
@@ -152,7 +159,7 @@ internal abstract class ImagingConfirmationDialogBase : Form
 
         ClientSize = new Size(
             ClientSize.Width,
-            buttonTop + ShellDialogChrome.ButtonHeight + BottomMargin);
+            buttonTop + buttonRowHeight + BottomMargin);
     }
 
     protected static string FormatBytes(ulong bytes)
