@@ -71,7 +71,10 @@ public sealed class ImagingDiskStorageInfo
 
 public sealed class ImagingPartitionInfo
 {
+    // PartitionNumber is the Storage/DiskPart number (normally one-based).
+    // Win32PartitionIndex retains Win32_DiskPartition.Index for diagnostics.
     public int PartitionNumber { get; init; }
+    public int Win32PartitionIndex { get; init; }
     public string DeviceId { get; init; } = string.Empty;
     public string Type { get; init; } = string.Empty;
     public ulong SizeBytes { get; init; }

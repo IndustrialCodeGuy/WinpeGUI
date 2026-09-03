@@ -48,8 +48,6 @@ public sealed class PartitionFormatService
     }
 
     public async Task<PartitionFormatResult> FormatQuickAsync(
-        int diskNumber,
-        int partitionNumber,
         string targetRoot,
         string fileSystem,
         CancellationToken cancellationToken)
@@ -116,8 +114,8 @@ public sealed class PartitionFormatService
             using Process process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Unable to start DiskPart.exe.");
 
-            Task<string> outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            Task<string> errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
+            Task<string> errorTask = process.StandardError.ReadToEndAsync();
 
             try
             {
@@ -132,6 +130,8 @@ public sealed class PartitionFormatService
                 }
                 catch { }
 
+                try { await process.WaitForExitAsync().ConfigureAwait(false); } catch { }
+                try { await Task.WhenAll(outputTask, errorTask).ConfigureAwait(false); } catch { }
                 throw;
             }
 

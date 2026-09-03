@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Imaging.Core;
@@ -9,6 +7,13 @@ public sealed class WinReStagingService
     private static readonly Regex RecoveryLocationRegex = new(
         @"(?<location>\\\\\?\\GLOBALROOT\\device\\harddisk(?<disk>\d+)\\partition(?<partition>\d+)(?<relative>\\[^\r\n]*))",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private readonly TemporaryDriveLetterService _temporaryDriveLetters;
+
+    public WinReStagingService(TemporaryDriveLetterService temporaryDriveLetters)
+    {
+        _temporaryDriveLetters = temporaryDriveLetters ?? throw new ArgumentNullException(nameof(temporaryDriveLetters));
+    }
 
     public string GetWindowsDirectory(string sourceRoot)
     {
@@ -36,52 +41,28 @@ public sealed class WinReStagingService
         if (!location.Success)
             return WinReStageResult.Failed(location.Error);
 
-        char temporaryLetter;
-        try
-        {
-            temporaryLetter = FindAvailableDriveLetter();
-        }
-        catch (Exception ex)
-        {
-            return WinReStageResult.Failed(ex.Message);
-        }
-
-        string tempRoot = $"{temporaryLetter}:\\";
-        bool assigned = false;
+        TemporaryDriveLetterResult? assignment = null;
         bool copied = false;
         string stagingError = string.Empty;
         string? removalError = null;
 
         try
         {
-            ProcessResult assign = RunDiskPart(
-                $"select disk {location.DiskNumber}\r\n" +
-                $"select partition {location.PartitionNumber}\r\n" +
-                $"assign letter={temporaryLetter}\r\n" +
-                "exit\r\n");
-
-            // If DiskPart reports success, always remember that the letter may
-            // now exist so the finally block can attempt to remove it even if
-            // the volume never becomes accessible or winre.wim is missing.
-            assigned = assign.ExitCode == 0;
-
-            if (assigned && !Directory.Exists(tempRoot))
-                Thread.Sleep(150);
-
-            if (!assigned || !Directory.Exists(tempRoot))
+            assignment = _temporaryDriveLetters.Assign(location.DiskNumber, location.PartitionNumber);
+            if (!assignment.Success)
             {
-                stagingError = BuildProcessFailure(
-                    "DiskPart could not temporarily assign an accessible drive letter to the configured Windows RE partition.",
-                    assign);
+                stagingError =
+                    "Imaging Manager could not temporarily assign an accessible drive letter to the configured Windows RE partition.\n\n" +
+                    assignment.Error;
             }
             else
             {
                 string relativeDirectory = NormalizeRecoveryRelativePath(location.RelativePath);
-                string source = Path.Combine(tempRoot, relativeDirectory.TrimStart('\\'), "winre.wim");
+                string source = Path.Combine(assignment.Root, relativeDirectory.TrimStart('\\'), "winre.wim");
                 if (!File.Exists(source))
                 {
                     stagingError =
-                        $"The configured Windows RE partition was mounted as {temporaryLetter}:, but winre.wim was not found at:\n\n{source}";
+                        $"The configured Windows RE partition was mounted as {assignment.DriveLetter}:, but winre.wim was not found at:\n\n{source}";
                 }
                 else
                 {
@@ -97,30 +78,9 @@ public sealed class WinReStagingService
         }
         finally
         {
-            if (assigned)
+            if (assignment?.Success == true)
             {
-                try
-                {
-                    ProcessResult remove = RunDiskPart(
-                        $"select disk {location.DiskNumber}\r\n" +
-                        $"select partition {location.PartitionNumber}\r\n" +
-                        $"remove letter={temporaryLetter}\r\n" +
-                        "exit\r\n");
-
-                    if (remove.ExitCode == 0 && Directory.Exists(tempRoot))
-                        Thread.Sleep(150);
-
-                    if (remove.ExitCode != 0 || Directory.Exists(tempRoot))
-                    {
-                        removalError = BuildProcessFailure(
-                            $"DiskPart could not remove the temporary {temporaryLetter}: drive letter.",
-                            remove);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    removalError = $"DiskPart could not remove the temporary {temporaryLetter}: drive letter.\n\n{ex.Message}";
-                }
+                removalError = _temporaryDriveLetters.Remove(assignment);
             }
         }
 
@@ -170,22 +130,8 @@ public sealed class WinReStagingService
                 "REAgentC.exe was not found, so the configured Windows RE partition could not be determined.");
         }
 
-        ProcessStartInfo startInfo = new()
-        {
-            FileName = reagentc,
-            WorkingDirectory = Path.GetDirectoryName(reagentc) ?? windowsDirectory,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-        startInfo.ArgumentList.Add("/info");
-        startInfo.ArgumentList.Add("/target");
-        startInfo.ArgumentList.Add(windowsDirectory);
-
-        ProcessResult result = RunProcess(startInfo);
-        string combined = string.Join(Environment.NewLine, new[] { result.StandardOutput, result.StandardError }
-            .Where(static s => !string.IsNullOrWhiteSpace(s)));
+        ProcessResult result = RunProcess(reagentc, "/info", "/target", windowsDirectory);
+        string combined = result.CombinedOutput;
 
         Match match = RecoveryLocationRegex.Match(combined);
         if (!match.Success ||
@@ -216,77 +162,36 @@ public sealed class WinReStagingService
         return path.TrimEnd('\\');
     }
 
-    private static char FindAvailableDriveLetter()
+    private static ProcessResult RunProcess(string fileName, params string[] arguments)
     {
-        HashSet<char> used = Directory.GetLogicalDrives()
-            .Where(static d => d.Length >= 2 && d[1] == ':')
-            .Select(static d => char.ToUpperInvariant(d[0]))
-            .ToHashSet();
-
-        for (char letter = 'Z'; letter >= 'D'; letter--)
+        System.Diagnostics.ProcessStartInfo startInfo = new()
         {
-            if (letter == 'X')
-                continue;
-            if (!used.Contains(letter))
-                return letter;
-        }
+            FileName = fileName,
+            WorkingDirectory = Path.GetDirectoryName(fileName) ?? Environment.SystemDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        foreach (string argument in arguments)
+            startInfo.ArgumentList.Add(argument);
 
-        throw new InvalidOperationException(
-            "No unused drive letter is available for temporarily mounting the Windows RE partition.");
-    }
-
-    private static ProcessResult RunDiskPart(string script)
-    {
-        string diskPartPath = Path.Combine(Environment.SystemDirectory, "diskpart.exe");
-        if (!File.Exists(diskPartPath))
-        {
-            throw new FileNotFoundException(
-                "DiskPart.exe was not found under the active Windows system directory.",
-                diskPartPath);
-        }
-
-        string scriptPath = Path.Combine(Path.GetTempPath(), $"ImagingManager-{Guid.NewGuid():N}.txt");
-        File.WriteAllText(scriptPath, script, Encoding.ASCII);
-
-        try
-        {
-            ProcessStartInfo startInfo = new()
-            {
-                FileName = diskPartPath,
-                WorkingDirectory = Path.GetDirectoryName(diskPartPath) ?? Environment.SystemDirectory,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            startInfo.ArgumentList.Add("/s");
-            startInfo.ArgumentList.Add(scriptPath);
-            return RunProcess(startInfo);
-        }
-        finally
-        {
-            try { File.Delete(scriptPath); } catch { }
-        }
-    }
-
-    private static ProcessResult RunProcess(ProcessStartInfo startInfo)
-    {
-        using Process process = Process.Start(startInfo)
+        using System.Diagnostics.Process process = System.Diagnostics.Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Unable to start {Path.GetFileName(startInfo.FileName)}.");
-        string output = process.StandardOutput.ReadToEnd();
-        string error = process.StandardError.ReadToEnd();
+        Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
+        Task<string> errorTask = process.StandardError.ReadToEndAsync();
         process.WaitForExit();
+        string output = outputTask.GetAwaiter().GetResult();
+        string error = errorTask.GetAwaiter().GetResult();
         return new ProcessResult(process.ExitCode, output.Trim(), error.Trim());
     }
 
-    private static string BuildProcessFailure(string message, ProcessResult result)
+    private readonly record struct ProcessResult(int ExitCode, string StandardOutput, string StandardError)
     {
-        string detail = string.Join(Environment.NewLine, new[] { result.StandardOutput, result.StandardError }
-            .Where(static s => !string.IsNullOrWhiteSpace(s)));
-        return string.IsNullOrWhiteSpace(detail) ? message : message + "\n\n" + detail;
+        public string CombinedOutput => string.Join(
+            Environment.NewLine,
+            new[] { StandardOutput, StandardError }.Where(static text => !string.IsNullOrWhiteSpace(text)));
     }
-
-    private readonly record struct ProcessResult(int ExitCode, string StandardOutput, string StandardError);
 
     private sealed class RecoveryLocationResult
     {

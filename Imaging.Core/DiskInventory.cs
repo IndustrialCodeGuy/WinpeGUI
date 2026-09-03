@@ -221,10 +221,15 @@ public sealed class DiskInventory
                 string deviceId = Convert.ToString(partition["DeviceID"])?.Trim() ?? string.Empty;
                 ulong offset = ReadUInt64(partition["StartingOffset"]);
                 storagePartitions.TryGetValue((diskIndex, offset), out ImagingPartitionStorageInfo? storageInfo);
+                int win32PartitionIndex = ReadInt32(partition["Index"]);
+                int partitionNumber = storageInfo is { PartitionNumber: > 0 }
+                    ? storageInfo.PartitionNumber
+                    : win32PartitionIndex + 1;
 
                 ImagingPartitionInfo info = new()
                 {
-                    PartitionNumber = ReadInt32(partition["Index"]),
+                    PartitionNumber = partitionNumber,
+                    Win32PartitionIndex = win32PartitionIndex,
                     DeviceId = deviceId,
                     Type = Convert.ToString(partition["Type"])?.Trim() ?? string.Empty,
                     SizeBytes = ReadUInt64(partition["Size"]),

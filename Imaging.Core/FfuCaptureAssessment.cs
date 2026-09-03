@@ -16,6 +16,8 @@ public sealed class FfuCaptureAssessment
 
     public static FfuCaptureAssessment Evaluate(ImagingDiskInfo disk)
     {
+        ArgumentNullException.ThrowIfNull(disk);
+
         if (!disk.BitLockerStatusAvailable)
         {
             return new FfuCaptureAssessment

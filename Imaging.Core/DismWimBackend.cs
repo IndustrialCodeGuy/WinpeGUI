@@ -1,13 +1,10 @@
-using System.Diagnostics;
 using System.Globalization;
-using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Imaging.Core;
 
 public sealed class DismWimBackend
 {
-    private static readonly Regex PercentRegex = new(@"(?<!\d)(?<value>\d{1,3}(?:\.\d+)?)\s*%", RegexOptions.Compiled);
     private static readonly Regex ImageInfoFieldRegex = new(@"^(?<field>Index|Name|Description)\s*:\s*(?<value>.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex MountedImageFieldRegex = new(@"^(?<field>Mount Dir|Image File|Image Index|Mounted Read/Write|Status)\s*:\s*(?<value>.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
@@ -324,82 +321,14 @@ public sealed class DismWimBackend
         IProgress<WimOperationProgress>? progress,
         CancellationToken cancellationToken)
     {
-        string dismPath = ResolveDismPath();
-        ProcessStartInfo startInfo = new()
-        {
-            FileName = dismPath,
-            WorkingDirectory = Path.GetDirectoryName(dismPath) ?? Environment.SystemDirectory,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
+        DismProcessResult result = await DismProcessRunner.RunAsync(
+            arguments,
+            (percentage, message) => progress?.Report(new WimOperationProgress(percentage, message)),
+            cancellationToken).ConfigureAwait(false);
 
-        foreach (string argument in arguments)
-            startInfo.ArgumentList.Add(argument);
-
-        using Process process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Unable to start DISM.exe.");
-
-        StringBuilder output = new();
-        object sync = new();
-        int? lastPercent = null;
-        string lastMessage = string.Empty;
-
-        void consumeLine(string line)
-        {
-            if (string.IsNullOrWhiteSpace(line))
-                return;
-
-            string trimmed = line.Trim();
-            lock (sync)
-            {
-                output.AppendLine(trimmed);
-            }
-
-            int? percent = TryParsePercent(trimmed);
-            string message = GetProgressMessage(trimmed);
-
-            if (percent.HasValue)
-                lastPercent = percent;
-            if (!string.IsNullOrWhiteSpace(message))
-                lastMessage = message;
-
-            progress?.Report(new WimOperationProgress(lastPercent, string.IsNullOrWhiteSpace(lastMessage) ? trimmed : lastMessage));
-        }
-
-        Task stdoutTask = ReadProgressStreamAsync(process.StandardOutput, consumeLine);
-        Task stderrTask = ReadProgressStreamAsync(process.StandardError, consumeLine);
-
-        using CancellationTokenRegistration registration = cancellationToken.Register(() =>
-        {
-            try
-            {
-                if (!process.HasExited)
-                    process.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-            }
-        });
-
-        try
-        {
-            await process.WaitForExitAsync().ConfigureAwait(false);
-            await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-        }
-
-        string finalOutput;
-        lock (sync)
-            finalOutput = output.ToString().Trim();
-
-        if (cancellationToken.IsCancellationRequested)
-            return WimOperationResult.Cancelled(finalOutput);
-
-        return WimOperationResult.Completed(process.ExitCode, finalOutput);
+        return result.Canceled
+            ? WimOperationResult.Cancelled(result.Output)
+            : WimOperationResult.Completed(result.ExitCode, result.Output);
     }
 
     private static IReadOnlyList<WimMountedImageInfo> ParseMountedImageInfo(string output)
@@ -416,17 +345,14 @@ public sealed class DismWimBackend
             if (string.IsNullOrWhiteSpace(mountDirectory))
                 return;
 
-            if (imageFile.EndsWith(".wim", StringComparison.OrdinalIgnoreCase))
+            images.Add(new WimMountedImageInfo
             {
-                images.Add(new WimMountedImageInfo
-                {
-                    MountDirectory = mountDirectory,
-                    ImageFile = imageFile,
-                    ImageIndex = imageIndex,
-                    ReadWrite = readWrite,
-                    Status = status
-                });
-            }
+                MountDirectory = mountDirectory,
+                ImageFile = imageFile,
+                ImageIndex = imageIndex,
+                ReadWrite = readWrite,
+                Status = status
+            });
 
             mountDirectory = string.Empty;
             imageFile = string.Empty;
@@ -526,86 +452,4 @@ public sealed class DismWimBackend
         return images.OrderBy(static image => image.Index).ToArray();
     }
 
-    private static async Task ReadProgressStreamAsync(TextReader reader, Action<string> consumeLine)
-    {
-        char[] buffer = new char[256];
-        StringBuilder line = new();
-
-        while (true)
-        {
-            int read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
-            if (read <= 0)
-                break;
-
-            for (int i = 0; i < read; i++)
-            {
-                char c = buffer[i];
-                if (c == '\r' || c == '\n')
-                {
-                    if (line.Length > 0)
-                    {
-                        consumeLine(line.ToString());
-                        line.Clear();
-                    }
-
-                    continue;
-                }
-
-                line.Append(c);
-            }
-        }
-
-        if (line.Length > 0)
-            consumeLine(line.ToString());
-    }
-
-    private static int? TryParsePercent(string line)
-    {
-        Match match = PercentRegex.Match(line);
-        if (!match.Success ||
-            !double.TryParse(match.Groups["value"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double value))
-        {
-            return null;
-        }
-
-        return Math.Clamp((int)Math.Round(value), 0, 100);
-    }
-
-    private static string GetProgressMessage(string line)
-    {
-        if (TryParsePercent(line).HasValue)
-            return "Processing image...";
-
-        if (line.StartsWith("Deployment Image Servicing", StringComparison.OrdinalIgnoreCase) ||
-            line.StartsWith("Version:", StringComparison.OrdinalIgnoreCase) ||
-            line.StartsWith("Image Version:", StringComparison.OrdinalIgnoreCase))
-        {
-            return string.Empty;
-        }
-
-        return line.Length <= 160 ? line : line[..160];
-    }
-
-    private static string ResolveDismPath()
-    {
-        string? systemRoot = Environment.GetEnvironmentVariable("SystemRoot");
-        List<string> candidates = new();
-
-        if (!string.IsNullOrWhiteSpace(Environment.SystemDirectory))
-            candidates.Add(Path.Combine(Environment.SystemDirectory, "dism.exe"));
-
-        if (!string.IsNullOrWhiteSpace(systemRoot))
-        {
-            candidates.Add(Path.Combine(systemRoot, "Sysnative", "dism.exe"));
-            candidates.Add(Path.Combine(systemRoot, "System32", "dism.exe"));
-        }
-
-        foreach (string candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            if (File.Exists(candidate))
-                return candidate;
-        }
-
-        throw new FileNotFoundException("DISM.exe was not found under the active Windows system directory.", "dism.exe");
-    }
 }

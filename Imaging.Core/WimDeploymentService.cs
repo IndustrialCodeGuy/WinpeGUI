@@ -202,7 +202,7 @@ public sealed class WimDeploymentService
 
         cancellationToken.ThrowIfCancellationRequested();
         report("Configuring Windows Recovery Environment...");
-        ConfigureRecovery(transcript, warnings, cancellationToken);
+        await ConfigureRecoveryAsync(transcript, warnings, cancellationToken).ConfigureAwait(false);
 
         cancellationToken.ThrowIfCancellationRequested();
         report("Hiding the Recovery partition...");
@@ -233,7 +233,7 @@ public sealed class WimDeploymentService
         };
     }
 
-    private static void ConfigureRecovery(
+    private static async Task ConfigureRecoveryAsync(
         List<string> transcript,
         List<string> warnings,
         CancellationToken cancellationToken)
@@ -276,7 +276,7 @@ public sealed class WimDeploymentService
 
         try
         {
-            ProcessResult setRe = RunProcess(
+            ProcessResult setRe = await RunProcessAsync(
                 ResolveAppliedOrSystemTool("reagentc.exe"),
                 new[]
                 {
@@ -286,7 +286,7 @@ public sealed class WimDeploymentService
                     "/Target",
                     @"C:\Windows"
                 },
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
             AppendTranscript(transcript, "REAgentC setreimage", setRe);
             if (!setRe.Success)
                 warnings.Add("winre.wim was copied to the Recovery partition, but REAgentC could not register it with the applied Windows installation.");
@@ -464,34 +464,6 @@ public sealed class WimDeploymentService
         return markers.Any(marker => output.Contains(marker, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static ProcessResult RunProcess(string fileName, IEnumerable<string> arguments, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        ProcessStartInfo startInfo = CreateProcessStartInfo(fileName, arguments);
-        using Process process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException($"Unable to start {Path.GetFileName(fileName)}.");
-
-        using CancellationTokenRegistration registration = cancellationToken.Register(() =>
-        {
-            try
-            {
-                if (!process.HasExited)
-                    process.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-            }
-        });
-
-        string output = process.StandardOutput.ReadToEnd();
-        string error = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        cancellationToken.ThrowIfCancellationRequested();
-
-        return new ProcessResult(process.ExitCode == 0, process.ExitCode, output.Trim(), error.Trim());
-    }
-
     private static async Task<ProcessResult> RunProcessAsync(
         string fileName,
         IEnumerable<string> arguments,
@@ -525,6 +497,7 @@ public sealed class WimDeploymentService
         catch (OperationCanceledException)
         {
             try { await process.WaitForExitAsync().ConfigureAwait(false); } catch { }
+            try { await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false); } catch { }
             throw;
         }
 

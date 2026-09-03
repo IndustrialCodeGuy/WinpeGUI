@@ -33,8 +33,8 @@ public sealed class TemporaryDriveLetterService
         }
 
         bool assigned = assign.ExitCode == 0;
-        if (assigned && !Directory.Exists(root))
-            Thread.Sleep(200);
+        if (assigned)
+            WaitForRootState(root, shouldExist: true);
 
         if (!assigned || !Directory.Exists(root))
         {
@@ -81,8 +81,8 @@ public sealed class TemporaryDriveLetterService
                 $"remove letter={letter}\r\n" +
                 "exit\r\n");
 
-            if (remove.ExitCode == 0 && Directory.Exists(root))
-                Thread.Sleep(200);
+            if (remove.ExitCode == 0)
+                WaitForRootState(root, shouldExist: false);
 
             if (remove.ExitCode != 0 || Directory.Exists(root))
             {
@@ -147,15 +147,23 @@ public sealed class TemporaryDriveLetterService
 
             using Process process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Unable to start DiskPart.exe.");
-            string output = process.StandardOutput.ReadToEnd();
-            string error = process.StandardError.ReadToEnd();
+            Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
+            Task<string> errorTask = process.StandardError.ReadToEndAsync();
             process.WaitForExit();
+            string output = outputTask.GetAwaiter().GetResult();
+            string error = errorTask.GetAwaiter().GetResult();
             return new ProcessResult(process.ExitCode, output.Trim(), error.Trim());
         }
         finally
         {
             try { File.Delete(scriptPath); } catch { }
         }
+    }
+
+    private static void WaitForRootState(string root, bool shouldExist)
+    {
+        for (int attempt = 0; attempt < 10 && Directory.Exists(root) != shouldExist; attempt++)
+            Thread.Sleep(100);
     }
 
     private static string BuildProcessFailure(string message, ProcessResult result)
