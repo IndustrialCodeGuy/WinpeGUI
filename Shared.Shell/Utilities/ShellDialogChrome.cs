@@ -47,6 +47,19 @@ public static class ShellDialogChrome
         button.Height = ButtonHeight;
     }
 
+    public static void ApplyTextSafeButton(Button button, int minimumWidth = ButtonWidth)
+    {
+        ArgumentNullException.ThrowIfNull(button);
+
+        ApplyStandardButton(button, minimumWidth);
+
+        Size preferred = button.GetPreferredSize(Size.Empty);
+        Size text = TextRenderer.MeasureText(button.Text ?? string.Empty, button.Font);
+
+        button.Width = Math.Max(button.Width, Math.Max(preferred.Width, text.Width + 20));
+        button.Height = Math.Max(button.Height, Math.Max(preferred.Height, text.Height + 8));
+    }
+
     public static void ApplyHeaderFont(Control lifetimeOwner, params Control[] controls)
     {
         ArgumentNullException.ThrowIfNull(lifetimeOwner);
