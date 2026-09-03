@@ -3,7 +3,7 @@ using Shared.Shell.Theming;
 
 namespace Imaging.Manager;
 
-internal sealed class UnmountWimDialog : Form
+internal sealed class UnmountWimDialog : ImagingConfirmationDialogBase
 {
     private readonly ComboBox? _images;
     private readonly WimMountedImageInfo? _singleImage;
@@ -12,70 +12,48 @@ internal sealed class UnmountWimDialog : Form
     private readonly Button _commit;
 
     public UnmountWimDialog(IReadOnlyList<WimMountedImageInfo> images)
+        : base("Unmount WIM", 650)
     {
         if (images == null || images.Count == 0)
             throw new ArgumentException("At least one mounted WIM is required.", nameof(images));
 
-        Text = "Unmount WIM";
-        StartPosition = FormStartPosition.CenterParent;
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        MaximizeBox = false;
-        MinimizeBox = false;
-        ShowInTaskbar = false;
-        AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(650, 326);
-        BackColor = ShellTheme.WindowBack;
-        ForeColor = ShellTheme.TextColor;
+        AddHeader("Unmount mounted WIM image?");
 
-        Label header = new()
+        Panel selector = new()
         {
-            Left = 16,
-            Top = 14,
-            Width = 618,
-            Height = 30,
-            Font = new Font(Font, FontStyle.Bold),
-            Text = "Unmount mounted WIM image?"
+            Font = Font,
+            BackColor = ShellTheme.WindowBack,
+            ForeColor = ShellTheme.TextColor
         };
-
-        Label imageCaption = new()
+        selector.Controls.Add(new Label
         {
-            Left = 16,
-            Top = 58,
+            Left = 0,
+            Top = 2,
             Width = 92,
-            Height = 24,
+            Height = BodyLineHeight,
             Text = "Mounted WIM:"
-        };
-
-        _details = new Label
-        {
-            Left = 16,
-            Top = 98,
-            Width = 618,
-            Height = 82,
-            AutoEllipsis = true
-        };
+        });
 
         if (images.Count == 1)
         {
             _singleImage = images[0];
-            Label selected = new()
+            selector.Controls.Add(new Label
             {
-                Left = 112,
-                Top = 54,
-                Width = 522,
-                Height = 30,
+                Left = 100,
+                Top = 2,
+                Width = ContentWidth - 100,
+                Height = BodyLineHeight,
                 AutoEllipsis = true,
                 Text = _singleImage.DisplayName
-            };
-            Controls.Add(selected);
+            });
         }
         else
         {
             _images = new ComboBox
             {
-                Left = 112,
-                Top = 52,
-                Width = 522,
+                Left = 100,
+                Top = 0,
+                Width = ContentWidth - 100,
                 Height = 26,
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 DisplayMember = nameof(WimMountedImageInfo.DisplayName)
@@ -83,49 +61,26 @@ internal sealed class UnmountWimDialog : Form
             foreach (WimMountedImageInfo image in images)
                 _images.Items.Add(image);
             _images.SelectedIndex = 0;
-            _images.SelectedIndexChanged += (_, _) => UpdateDetails();
-            Controls.Add(_images);
+            selector.Controls.Add(_images);
         }
+        AddControlRow(selector, 26, gapAfter: 8);
 
-        _note = new Label
-        {
-            Left = 16,
-            Top = 190,
-            Width = 618,
-            Height = 52,
-            AutoSize = false,
-            Text = "Commit saves changes to the WIM first, then releases the mount. Discard releases the mount without saving pending changes."
-        };
+        _details = new Label { AutoEllipsis = true };
+        AddControlRow(_details, BodyLineHeight * 3, gapAfter: 8);
 
-        Button cancel = new()
-        {
-            Left = 356,
-            Top = 278,
-            Width = 80,
-            Height = 32,
-            Text = "Cancel",
-            DialogResult = DialogResult.Cancel
-        };
-        Button discard = new()
-        {
-            Left = 444,
-            Top = 278,
-            Width = 92,
-            Height = 32,
-            Text = "Discard",
-            DialogResult = DialogResult.No
-        };
-        _commit = new Button
-        {
-            Left = 544,
-            Top = 278,
-            Width = 90,
-            Height = 32,
-            Text = "Commit",
-            DialogResult = DialogResult.Yes
-        };
+        _note = AddTextBlock(
+            "Commit saves changes to the WIM first, then releases the mount. Discard releases the mount " +
+            "without saving pending changes.",
+            gapAfter: 0);
 
-        Controls.AddRange(new Control[] { header, imageCaption, _details, _note, cancel, discard, _commit });
+        Button cancel = CreateButton("Cancel", DialogResult.Cancel);
+        Button discard = CreateButton("Discard", DialogResult.No, width: 92);
+        _commit = CreateButton("Commit", DialogResult.Yes, width: 90);
+        FinishLayout(new[] { cancel, discard, _commit }, gapBefore: 12);
+
+        if (_images != null)
+            _images.SelectedIndexChanged += (_, _) => UpdateDetails();
+
         AcceptButton = _commit;
         CancelButton = cancel;
         UpdateDetails();
@@ -147,7 +102,10 @@ internal sealed class UnmountWimDialog : Form
 
         string mode = image.ReadWrite ? "Read/write" : "Read-only";
         string status = string.IsNullOrWhiteSpace(image.Status) ? "Unknown" : image.Status;
-        _details.Text = $"Image: {image.ImageFile}\nMount folder: {image.MountDirectory}\nMode: {mode}    Status: {status}";
+        _details.Text =
+            $"WIM File: {image.ImageFile}\n" +
+            $"Mount Dir: {image.MountDirectory}\n" +
+            $"Mode: {mode}    Status: {status}";
         _commit.Enabled = image.ReadWrite;
         _note.Text = image.ReadWrite
             ? "Commit saves changes to the WIM first, then releases the mount. Discard releases the mount without saving pending changes."

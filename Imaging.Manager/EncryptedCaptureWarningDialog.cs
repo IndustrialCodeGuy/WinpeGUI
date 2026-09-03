@@ -1,49 +1,20 @@
 using Imaging.Core;
-using Shared.Shell.Theming;
 using System.Text;
 
 namespace Imaging.Manager;
 
-internal sealed class EncryptedCaptureWarningDialog : Form
+internal sealed class EncryptedCaptureWarningDialog : ImagingConfirmationDialogBase
 {
     public EncryptedCaptureWarningDialog(ImagingDiskInfo disk, FfuCaptureAssessment assessment)
+        : base("BitLocker Encryption Detected", 560)
     {
-        Text = "BitLocker Encryption Detected";
-        StartPosition = FormStartPosition.CenterParent;
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        MaximizeBox = false;
-        MinimizeBox = false;
-        ShowInTaskbar = false;
-        AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(560, 292);
-        BackColor = ShellTheme.WindowBack;
-        ForeColor = ShellTheme.TextColor;
+        AddHeader($"Disk {disk.DiskNumber} contains BitLocker-encrypted data.");
+        AddTextBlock(BuildText(assessment), gapAfter: 0);
 
-        Label header = new()
-        {
-            Left = 16,
-            Top = 14,
-            Width = 528,
-            Height = 44,
-            Font = new Font(Font, FontStyle.Bold),
-            Text = $"Disk {disk.DiskNumber} contains BitLocker-encrypted data."
-        };
-
-        Label body = new()
-        {
-            Left = 16,
-            Top = 58,
-            Width = 528,
-            Height = 154,
-            AutoSize = false,
-            Text = BuildText(assessment)
-        };
-
-        Button manage = new() { Left = 16, Top = 238, Width = 170, Height = 32, Text = "Review BitLocker", DialogResult = DialogResult.Retry };
-        Button cancel = new() { Left = 342, Top = 238, Width = 84, Height = 32, Text = "Cancel", DialogResult = DialogResult.Cancel };
-        Button anyway = new() { Left = 434, Top = 238, Width = 110, Height = 32, Text = "Capture Anyway", DialogResult = DialogResult.Ignore };
-
-        Controls.AddRange(new Control[] { header, body, manage, cancel, anyway });
+        Button manage = CreateButton("Review BitLocker", DialogResult.Retry, width: 140);
+        Button cancel = CreateButton("Cancel", DialogResult.Cancel);
+        Button anyway = CreateButton("Capture Anyway", DialogResult.Ignore, width: 110);
+        FinishLayout(new[] { cancel, anyway }, leftButton: manage, gapBefore: 12);
         CancelButton = cancel;
     }
 
@@ -55,11 +26,23 @@ internal sealed class EncryptedCaptureWarningDialog : Form
 
         foreach (ImagingBitLockerVolumeInfo volume in assessment.AffectedVolumes)
         {
-            string percent = volume.EncryptionPercentage.HasValue ? $"{volume.EncryptionPercentage.Value}% encrypted" : "encryption percentage unknown";
-            string lockText = volume.IsLocked switch { true => "locked", false => "unlocked", _ => "lock state unknown" };
-            string conversion = string.IsNullOrWhiteSpace(volume.ConversionStatus) ? "BitLocker active" : volume.ConversionStatus;
-            string encryptionType = string.IsNullOrWhiteSpace(volume.EncryptionType) ? string.Empty : $", {volume.EncryptionType}";
-            text.AppendLine($"{volume.MountPoint.TrimEnd('\\')}: {conversion}, {percent}{encryptionType}, {lockText}");
+            string percent = volume.EncryptionPercentage.HasValue
+                ? $"{volume.EncryptionPercentage.Value}% encrypted"
+                : "encryption percentage unknown";
+            string lockText = volume.IsLocked switch
+            {
+                true => "locked",
+                false => "unlocked",
+                _ => "lock state unknown"
+            };
+            string conversion = string.IsNullOrWhiteSpace(volume.ConversionStatus)
+                ? "BitLocker active"
+                : volume.ConversionStatus;
+            string encryptionType = string.IsNullOrWhiteSpace(volume.EncryptionType)
+                ? string.Empty
+                : $", {volume.EncryptionType}";
+            text.AppendLine(
+                $"{volume.MountPoint.TrimEnd('\\')}: {conversion}, {percent}{encryptionType}, {lockText}");
         }
 
         text.AppendLine();
