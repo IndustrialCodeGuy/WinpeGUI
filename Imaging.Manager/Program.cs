@@ -5,6 +5,8 @@ namespace Imaging.Manager;
 
 internal static class Program
 {
+    private const string InstanceMutexName = @"Local\WinPEGUI.ImagingManager";
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -23,8 +25,26 @@ internal static class Program
             return 1;
         }
 
-        using MainForm form = new();
-        Application.Run(form);
-        return 0;
+        using Mutex instanceMutex = new(true, InstanceMutexName, out bool isFirstInstance);
+        if (!isFirstInstance)
+        {
+            MessageBox.Show(
+                "Imaging Manager is already running. Use the existing window to avoid overlapping disk or image operations.",
+                "Imaging Manager",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return 0;
+        }
+
+        try
+        {
+            using MainForm form = new();
+            Application.Run(form);
+            return 0;
+        }
+        finally
+        {
+            instanceMutex.ReleaseMutex();
+        }
     }
 }

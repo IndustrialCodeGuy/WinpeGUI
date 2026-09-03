@@ -375,39 +375,9 @@ public partial class MainForm
             return;
         }
 
-        WimImageInfoResult imageInfo;
-        UseWaitCursor = true;
-        try
-        {
-            imageInfo = await _wimBackend.GetImagesAsync(imagePath, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            imageInfo = new WimImageInfoResult
-            {
-                Success = false,
-                ExitCode = -1,
-                Output = ex.Message
-            };
-        }
-        finally
-        {
-            UseWaitCursor = false;
-        }
-
-        if (!imageInfo.Success || imageInfo.Images.Count == 0)
-        {
-            string details = string.IsNullOrWhiteSpace(imageInfo.Output)
-                ? $"DISM exited with code {imageInfo.ExitCode}."
-                : imageInfo.Output;
-            MessageBox.Show(
-                this,
-                "Imaging Manager could not read the image list from the selected WIM.\n\n" + details,
-                "Deploy WIM",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
+        WimImageInfoResult? imageInfo = await TryLoadWimImageInfoAsync(imagePath, "Deploy WIM");
+        if (imageInfo == null)
             return;
-        }
 
         WimDeploymentFirmwareType firmwareType = _wimDeployment.DetectFirmwareType();
         if (firmwareType == WimDeploymentFirmwareType.Unknown)
@@ -427,6 +397,43 @@ public partial class MainForm
             return;
 
         await RunWimDeployAsync(disk, imagePath, confirm.SelectedImage, firmwareType);
+    }
+
+    private async Task<WimImageInfoResult?> TryLoadWimImageInfoAsync(string imagePath, string title)
+    {
+        WimImageInfoResult result;
+        UseWaitCursor = true;
+        try
+        {
+            result = await _wimBackend.GetImagesAsync(imagePath, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            result = new WimImageInfoResult
+            {
+                Success = false,
+                ExitCode = -1,
+                Output = ex.Message
+            };
+        }
+        finally
+        {
+            UseWaitCursor = false;
+        }
+
+        if (result.Success && result.Images.Count > 0)
+            return result;
+
+        string details = string.IsNullOrWhiteSpace(result.Output)
+            ? $"DISM exited with code {result.ExitCode}."
+            : result.Output;
+        MessageBox.Show(
+            this,
+            "Imaging Manager could not read the image list from the selected WIM.\n\n" + details,
+            title,
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error);
+        return null;
     }
 
     private async Task RunWimDeployAsync(
@@ -545,39 +552,9 @@ public partial class MainForm
             return;
         }
 
-        WimImageInfoResult imageInfo;
-        UseWaitCursor = true;
-        try
-        {
-            imageInfo = await _wimBackend.GetImagesAsync(imagePath, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            imageInfo = new WimImageInfoResult
-            {
-                Success = false,
-                ExitCode = -1,
-                Output = ex.Message
-            };
-        }
-        finally
-        {
-            UseWaitCursor = false;
-        }
-
-        if (!imageInfo.Success || imageInfo.Images.Count == 0)
-        {
-            string details = string.IsNullOrWhiteSpace(imageInfo.Output)
-                ? $"DISM exited with code {imageInfo.ExitCode}."
-                : imageInfo.Output;
-            MessageBox.Show(
-                this,
-                "Imaging Manager could not read the image list from the selected WIM.\n\n" + details,
-                "Mount WIM",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
+        WimImageInfoResult? imageInfo = await TryLoadWimImageInfoAsync(imagePath, "Mount WIM");
+        if (imageInfo == null)
             return;
-        }
 
         string? mountDirectory = RunExplorerFolderPicker("Select empty folder for WIM mount");
         if (string.IsNullOrWhiteSpace(mountDirectory))
@@ -701,7 +678,7 @@ public partial class MainForm
         LoadDisks(selectedDiskNumber);
         if (!string.IsNullOrWhiteSpace(selectedMountDirectory))
             RebuildMountedWimTiles(selectedMountDirectory);
-        await RefreshMountedWimStateAsync(selectedMountDirectory);
+        await RefreshMountedWimStateAsync(selectedMountDirectory, "Refresh Mounted WIMs");
     }
 
     private void LoadPendingWimUnmountState()
@@ -740,12 +717,24 @@ public partial class MainForm
 
         bool sameImage = string.IsNullOrWhiteSpace(state.ImageFile) ||
                          string.IsNullOrWhiteSpace(image.ImageFile) ||
-                         string.Equals(
-                             Path.GetFullPath(state.ImageFile),
-                             Path.GetFullPath(image.ImageFile),
-                             StringComparison.OrdinalIgnoreCase);
+                         PathsEqual(state.ImageFile, image.ImageFile);
         bool sameIndex = state.ImageIndex <= 0 || image.ImageIndex <= 0 || state.ImageIndex == image.ImageIndex;
         return sameImage && sameIndex;
+    }
+
+    private static bool PathsEqual(string first, string second)
+    {
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(first),
+                Path.GetFullPath(second),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return string.Equals(first.Trim(), second.Trim(), StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     private void MarkPendingWimUnmount(WimMountedImageInfo image)
@@ -797,40 +786,17 @@ public partial class MainForm
     private static bool IsDirectoryStillOpenUnmountError(WimOperationResult result) =>
         result.Output.Contains("0xc1420117", StringComparison.OrdinalIgnoreCase);
 
-    private async Task RefreshMountedWimStateAsync(string? preferredMountDirectory = null)
+    private async Task<bool> RefreshMountedWimStateAsync(
+        string? preferredMountDirectory = null,
+        string? errorTitle = null)
     {
         if (_operationActive || IsDisposed)
-            return;
+            return false;
 
         string? selectedMountDirectory = preferredMountDirectory ?? GetSelectedMountedWim()?.MountDirectory;
-        try
-        {
-            WimMountedImageInfoResult result = await _wimBackend.GetMountedImagesAsync(CancellationToken.None);
-            if (result.Success)
-            {
-                _mountedWims = result.Images;
-                ReconcilePendingWimUnmountState(_mountedWims);
-                RebuildMountedWimTiles(selectedMountDirectory);
-            }
-        }
-        catch
-        {
-            // Preserve the last known mounted-image row when DISM inventory
-            // temporarily fails. Refresh or the next servicing action can retry.
-        }
-
-        if (!IsDisposed)
-            UpdateSelectedDiskPanel();
-    }
-
-    private async Task<WimMountedImageInfo?> ResolveSelectedMountedWimForActionAsync(string title)
-    {
-        WimMountedImageInfo? selected = GetSelectedMountedWim();
-        if (selected == null)
-            return null;
-
         WimMountedImageInfoResult result;
-        UseWaitCursor = true;
+        if (errorTitle != null)
+            UseWaitCursor = true;
         try
         {
             result = await _wimBackend.GetMountedImagesAsync(CancellationToken.None);
@@ -846,27 +812,50 @@ public partial class MainForm
         }
         finally
         {
-            UseWaitCursor = false;
+            if (errorTitle != null && !IsDisposed)
+                UseWaitCursor = false;
         }
 
         if (!result.Success)
         {
-            string details = string.IsNullOrWhiteSpace(result.Output)
-                ? $"DISM exited with code {result.ExitCode}."
-                : result.Output;
-            MessageBox.Show(
-                this,
-                "Imaging Manager could not read the mounted WIM inventory.\n\n" + details,
-                title,
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
-            return null;
+            // Preserve the last known rows when inventory temporarily fails.
+            if (errorTitle != null && !IsDisposed)
+            {
+                string details = string.IsNullOrWhiteSpace(result.Output)
+                    ? $"DISM exited with code {result.ExitCode}."
+                    : result.Output;
+                MessageBox.Show(
+                    this,
+                    "Imaging Manager could not read the mounted WIM inventory.\n\n" + details,
+                    errorTitle,
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+
+            if (!IsDisposed)
+                UpdateSelectedDiskPanel();
+            return false;
         }
 
         _mountedWims = result.Images;
         ReconcilePendingWimUnmountState(_mountedWims);
+        RebuildMountedWimTiles(selectedMountDirectory);
+        if (!IsDisposed)
+            UpdateSelectedDiskPanel();
+        return true;
+    }
+
+    private async Task<WimMountedImageInfo?> ResolveSelectedMountedWimForActionAsync(string title)
+    {
+        WimMountedImageInfo? selected = GetSelectedMountedWim();
+        if (selected == null)
+            return null;
+
+        if (!await RefreshMountedWimStateAsync(selected.MountDirectory, title))
+            return null;
+
         WimMountedImageInfo? current = _mountedWims.FirstOrDefault(image =>
-            string.Equals(image.MountDirectory, selected.MountDirectory, StringComparison.OrdinalIgnoreCase));
+            PathsEqual(image.MountDirectory, selected.MountDirectory));
         RebuildMountedWimTiles(current?.MountDirectory);
         UpdateSelectedDiskPanel();
 
@@ -1245,7 +1234,8 @@ public partial class MainForm
         if (_operationActive)
             return;
 
-        await RefreshMountedWimStateAsync();
+        if (!await RefreshMountedWimStateAsync(errorTitle: "Cleanup Mounts"))
+            return;
         WimMountedImageInfo[] invalidMounts = _mountedWims
             .Where(static image => IsMountedWimStatus(image, "Invalid"))
             .ToArray();
@@ -1482,39 +1472,9 @@ public partial class MainForm
             return;
         }
 
-        WimImageInfoResult imageInfo;
-        UseWaitCursor = true;
-        try
-        {
-            imageInfo = await _wimBackend.GetImagesAsync(sourcePath, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            imageInfo = new WimImageInfoResult
-            {
-                Success = false,
-                ExitCode = -1,
-                Output = ex.Message
-            };
-        }
-        finally
-        {
-            UseWaitCursor = false;
-        }
-
-        if (!imageInfo.Success || imageInfo.Images.Count == 0)
-        {
-            string details = string.IsNullOrWhiteSpace(imageInfo.Output)
-                ? $"DISM exited with code {imageInfo.ExitCode}."
-                : imageInfo.Output;
-            MessageBox.Show(
-                this,
-                "Imaging Manager could not read the image list from the selected WIM.\n\n" + details,
-                "Export WIM",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
+        WimImageInfoResult? imageInfo = await TryLoadWimImageInfoAsync(sourcePath, "Export WIM");
+        if (imageInfo == null)
             return;
-        }
 
         string? destinationPath = RunExplorerPicker(
             save: true,
@@ -1682,39 +1642,9 @@ public partial class MainForm
             return;
         }
 
-        WimImageInfoResult imageInfo;
-        UseWaitCursor = true;
-        try
-        {
-            imageInfo = await _wimBackend.GetImagesAsync(imagePath, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            imageInfo = new WimImageInfoResult
-            {
-                Success = false,
-                ExitCode = -1,
-                Output = ex.Message
-            };
-        }
-        finally
-        {
-            UseWaitCursor = false;
-        }
-
-        if (!imageInfo.Success || imageInfo.Images.Count == 0)
-        {
-            string details = string.IsNullOrWhiteSpace(imageInfo.Output)
-                ? $"DISM exited with code {imageInfo.ExitCode}."
-                : imageInfo.Output;
-            MessageBox.Show(
-                this,
-                "Imaging Manager could not read the image list from the selected WIM.\n\n" + details,
-                "Apply WIM",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
+        WimImageInfoResult? imageInfo = await TryLoadWimImageInfoAsync(imagePath, "Apply WIM");
+        if (imageInfo == null)
             return;
-        }
 
         TemporaryDriveLetterResult? temporaryTargetMount = null;
         string targetRoot;
@@ -1780,7 +1710,6 @@ public partial class MainForm
             bool configureBootFiles = confirm.ConfigureBootFiles;
             operationRan = true;
             await RunWimApplyAsync(
-                disk,
                 partition,
                 targetRoot,
                 fileSystemResult.FileSystem,
@@ -1827,7 +1756,6 @@ public partial class MainForm
     }
 
     private async Task RunWimApplyAsync(
-        ImagingDiskInfo disk,
         ImagingPartitionInfo partition,
         string targetRoot,
         string fileSystem,
@@ -1844,8 +1772,6 @@ public partial class MainForm
         try
         {
             formatResult = await _partitionFormatter.FormatQuickAsync(
-                disk.DiskNumber,
-                partition.PartitionNumber,
                 targetRoot,
                 fileSystem,
                 CancellationToken.None);

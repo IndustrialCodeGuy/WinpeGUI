@@ -1427,8 +1427,7 @@ public partial class MainForm
         if (disk != null)
             AppendInfoLine(text, "Disk number", disk.DiskNumber.ToString());
         AppendInfoLine(text, "Partition number", reportedPartitionNumber.ToString());
-        if (storage != null && storage.PartitionNumber != partition.PartitionNumber)
-            AppendInfoLine(text, "Win32 partition index", partition.PartitionNumber.ToString());
+        AppendInfoLine(text, "Win32 partition index", partition.Win32PartitionIndex.ToString());
 
         string drives = partition.DriveLetters.Count == 0
             ? "None"

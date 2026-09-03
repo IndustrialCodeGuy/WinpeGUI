@@ -10,9 +10,9 @@ public partial class MainForm : Form
     private readonly DiskInventory _inventory = new();
     private readonly DismFfuBackend _ffuBackend = new();
     private readonly DismWimBackend _wimBackend = new();
-    private readonly WimDeploymentService _wimDeployment;
-    private readonly WinReStagingService _winReStaging = new();
     private readonly TemporaryDriveLetterService _temporaryDriveLetters = new();
+    private readonly WimDeploymentService _wimDeployment;
+    private readonly WinReStagingService _winReStaging;
     private readonly PartitionFormatService _partitionFormatter = new();
 
     private FlowLayoutPanel _pnlDisks = null!;
@@ -61,6 +61,7 @@ public partial class MainForm : Form
     public MainForm()
     {
         _wimDeployment = new WimDeploymentService(_wimBackend);
+        _winReStaging = new WinReStagingService(_temporaryDriveLetters);
 
         AutoScaleMode = AutoScaleMode.None;
         AutoScaleDimensions = new SizeF(96f, 96f);
