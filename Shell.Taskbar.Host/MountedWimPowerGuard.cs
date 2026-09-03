@@ -35,13 +35,13 @@ internal static class MountedWimPowerGuard
 
     public static async Task<MountedWimPowerProbeResult> ProbeAsync()
     {
-        string dismPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "dism.exe");
-        if (!File.Exists(dismPath))
+        string? dismPath = ResolveDismPath();
+        if (dismPath == null)
         {
             return new MountedWimPowerProbeResult
             {
                 Success = false,
-                Error = $"DISM.exe was not found at {dismPath}."
+                Error = "DISM.exe was not found under the active Windows system directory."
             };
         }
 
@@ -71,22 +71,29 @@ internal static class MountedWimPowerGuard
             Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
             Task<string> errorTask = process.StandardError.ReadToEndAsync();
 
+            bool timedOut = false;
             using CancellationTokenSource timeout = new(ProbeTimeout);
             try
             {
-                await process.WaitForExitAsync(timeout.Token).ConfigureAwait(true);
+                await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
+                timedOut = true;
+                TryKill(process);
                 try
                 {
-                    if (!process.HasExited)
-                        process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync().ConfigureAwait(false);
                 }
                 catch
                 {
                 }
+            }
 
+            string output = await outputTask.ConfigureAwait(false);
+            string error = await errorTask.ConfigureAwait(false);
+            if (timedOut)
+            {
                 return new MountedWimPowerProbeResult
                 {
                     Success = false,
@@ -94,8 +101,6 @@ internal static class MountedWimPowerGuard
                 };
             }
 
-            string output = await outputTask.ConfigureAwait(true);
-            string error = await errorTask.ConfigureAwait(true);
             if (process.ExitCode != 0)
             {
                 string details = string.IsNullOrWhiteSpace(error) ? output : error;
@@ -124,6 +129,34 @@ internal static class MountedWimPowerGuard
         }
     }
 
+    private static string? ResolveDismPath()
+    {
+        string? systemRoot = Environment.GetEnvironmentVariable("SystemRoot");
+        string[] candidates =
+        {
+            Path.Combine(Environment.SystemDirectory, "dism.exe"),
+            string.IsNullOrWhiteSpace(systemRoot) ? string.Empty : Path.Combine(systemRoot, "Sysnative", "dism.exe"),
+            string.IsNullOrWhiteSpace(systemRoot) ? string.Empty : Path.Combine(systemRoot, "System32", "dism.exe")
+        };
+
+        return candidates
+            .Where(static path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(File.Exists);
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+        }
+    }
+
     private static IReadOnlyList<MountedWimPowerImage> ParseMountedWims(string output)
     {
         List<MountedWimPowerImage> images = new();
@@ -135,8 +168,7 @@ internal static class MountedWimPowerGuard
 
         void flush()
         {
-            if (!string.IsNullOrWhiteSpace(mountDirectory) &&
-                imageFile.EndsWith(".wim", StringComparison.OrdinalIgnoreCase))
+            if (!string.IsNullOrWhiteSpace(mountDirectory))
             {
                 images.Add(new MountedWimPowerImage
                 {
