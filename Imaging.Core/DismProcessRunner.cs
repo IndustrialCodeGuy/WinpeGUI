@@ -41,7 +41,6 @@ internal static class DismProcessRunner
         StringBuilder output = new();
         object sync = new();
         int? lastPercent = null;
-        string lastMessage = string.Empty;
 
         void consumeLine(string line)
         {
@@ -56,14 +55,15 @@ internal static class DismProcessRunner
                 output.AppendLine(trimmed);
 
                 int? parsedPercent = TryParsePercent(trimmed);
-                string parsedMessage = GetProgressMessage(trimmed, parsedPercent.HasValue);
+                string? parsedMessage = GetProgressMessage(trimmed, parsedPercent);
+                if (parsedMessage == null)
+                    return;
+
                 if (parsedPercent.HasValue)
                     lastPercent = parsedPercent;
-                if (!string.IsNullOrWhiteSpace(parsedMessage))
-                    lastMessage = parsedMessage;
 
                 percentage = lastPercent;
-                progressMessage = string.IsNullOrWhiteSpace(lastMessage) ? trimmed : lastMessage;
+                progressMessage = parsedMessage;
             }
 
             reportProgress?.Invoke(percentage, progressMessage);
@@ -158,16 +158,17 @@ internal static class DismProcessRunner
         return Math.Clamp((int)Math.Round(value), 0, 100);
     }
 
-    private static string GetProgressMessage(string line, bool containsPercentage)
+    private static string? GetProgressMessage(string line, int? percentage)
     {
-        if (containsPercentage)
-            return "Processing image...";
+        if (percentage.HasValue)
+            return $"{percentage.Value}% complete";
 
         if (line.StartsWith("Deployment Image Servicing", StringComparison.OrdinalIgnoreCase) ||
             line.StartsWith("Version:", StringComparison.OrdinalIgnoreCase) ||
-            line.StartsWith("Image Version:", StringComparison.OrdinalIgnoreCase))
+            line.StartsWith("Image Version:", StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith("Copyright", StringComparison.OrdinalIgnoreCase))
         {
-            return string.Empty;
+            return null;
         }
 
         return line.Length <= 160 ? line : line[..160];
