@@ -1510,7 +1510,7 @@ public partial class MainForm
 
     private void AppendBitLockerDetails(StringBuilder text, ImagingDiskInfo disk)
     {
-        AppendInfoSection(text, "BitLocker / FFU capture");
+        AppendInfoSection(text, "BitLocker");
         if (!disk.BitLockerStatusAvailable)
         {
             text.AppendLine("BitLocker status unavailable; encryption state could not be verified.");
