@@ -1,4 +1,4 @@
-﻿using Shell.Core.Host;
+using Shell.Core.Host;
 using System.Diagnostics;
 using System.Text.Json;
 
@@ -190,6 +190,23 @@ internal static class Program
                 $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] File Manager EXE not found: \"{fileManager.Path}\". Requesting shutdown.{Environment.NewLine}");
 
             return RequestPowerActionOrHold(reboot: false, logPath);
+        }
+
+        IReadOnlyList<string> driveLetterPolicyMessages = WinPeDriveLetterPolicy.NormalizePrimaryWindowsDrive(new[]
+        {
+            launcherDir,
+            shellPath,
+            fileManager?.Path
+        });
+
+        // The startup drive-letter policy can move the volume that owns the configured
+        // log label/drive. Resolve it again before the supervised shell processes start.
+        logRoot = ResolveLogRoot(logTarget, launcherDir);
+        logPath = Path.Combine(logRoot, logFileName);
+        foreach (string message in driveLetterPolicyMessages)
+        {
+            SafeAppend(logPath,
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] Drive-letter policy: {message}{Environment.NewLine}");
         }
 
         var launcherSw = Stopwatch.StartNew();
