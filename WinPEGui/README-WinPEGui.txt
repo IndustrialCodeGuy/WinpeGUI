@@ -12,31 +12,6 @@ The taskbar host still has a small fallback that can start/ensure
 FileManager.exe -host if it is launched manually without WinPEGui, but
 normal WinPE startup should let WinPEGui supervise both processes.
 
-Startup C: policy
------------------
-Before the taskbar and file-manager processes start, WinPEGui normalizes the
-WinPE C: assignment. It reuses the same BitLocker OS-volume signal and Windows
-installation check used elsewhere in the shell. If exactly one Windows system
-volume is found, that volume is assigned C:. If multiple candidates exist but
-only one is on a fixed/internal disk, the fixed/internal candidate is assigned C:.
-Physical USB attachment is determined with the same PnP-parent-chain logic File
-Manager uses for its Eject option. SATA or NVMe drives behind USB/UASP bridges
-therefore do not count as internal even when they report DriveType.Fixed or a
-SCSI/SATA/NVMe storage bus. MSFT_Disk.BusType is used only as a fallback when
-PnP ancestry cannot be resolved. If multiple candidates remain ambiguous and one
-already owns C:, that plausible assignment is preserved.
-
-When no primary Windows volume can be selected and C: belongs to an ordinary
-non-Windows volume, WinPEGui moves that volume to an unused high drive letter so
-C: remains reserved for a future Windows deployment. X: is never considered for
-reassignment. USB-attached Windows disks may still be detected as Windows system
-volumes; the USB ancestry only prevents one from winning the fixed/internal
-tie-breaker over an installed disk.
-
-The launcher will not move a volume that hosts WinPEGui, the configured taskbar
-host, or FileManager executable. Drive-letter-policy decisions and failures are
-written to the normal WinPEGui log and do not block shell startup.
-
 Default processes
 -----------------
 The default settings file launches:
