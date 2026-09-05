@@ -26,6 +26,8 @@ public partial class MainForm : Form
     private Panel _pnlGlobalActions = null!;
     private Panel _pnlContextActions = null!;
     private Label _lblSelectionContext = null!;
+    private Panel? _opticalVolumeRow;
+    private FlowLayoutPanel? _pnlOpticalVolumes;
     private Panel? _mountedWimRow;
     private FlowLayoutPanel? _pnlMountedWims;
     private Label _lblStatus = null!;
@@ -46,16 +48,21 @@ public partial class MainForm : Form
 
     private Panel? _selectedDiskTile;
     private Panel? _selectedPartitionTile;
+    private Panel? _selectedOpticalVolumeTile;
     private Panel? _selectedMountedWimTile;
     private IReadOnlyList<ImagingDiskInfo> _disks = Array.Empty<ImagingDiskInfo>();
+    private IReadOnlyList<ImagingVolumeInfo> _opticalVolumes = Array.Empty<ImagingVolumeInfo>();
     private readonly Dictionary<int, Image> _diskImagesBySize = new();
     private readonly Dictionary<(DriveVisualKind Kind, int Size), Image> _partitionImagesByKind = new();
     private bool _initialInventoryLoading = true;
     private bool _diskRefreshPending;
     private bool _diskRefreshInProgress;
     private Task? _diskRefreshTask;
+    private string? _pendingRefreshDiskIdentity;
     private int? _pendingRefreshDiskNumber;
+    private string? _pendingRefreshPartitionIdentity;
     private int? _pendingRefreshPartitionNumber;
+    private string? _pendingRefreshOpticalMountPoint;
     private string? _pendingRefreshMountedWimDirectory;
     private bool _operationActive => _operationCoordinator.IsOperationActive;
     private IReadOnlyList<WimMountedImageInfo> _mountedWims = Array.Empty<WimMountedImageInfo>();

@@ -622,7 +622,8 @@ public partial class MainForm
         string? imagePath = RunExplorerPicker(
             save: false,
             title: "Select WIM to mount",
-            extension: ".wim");
+            extension: ".wim",
+            initialPath: GetSelectedOpticalVolume()?.MountPoint);
         if (string.IsNullOrWhiteSpace(imagePath))
             return;
 
@@ -726,7 +727,6 @@ public partial class MainForm
             progressDialog.Close();
             EndOperation();
             Enabled = true;
-            UpdateSelectedDiskPanel();
             Activate();
         }
 
@@ -920,7 +920,7 @@ public partial class MainForm
 
         _mountedWims = result.Images;
         ReconcilePendingWimUnmountState(_mountedWims);
-        RebuildMountedWimTiles(selectedMountDirectory);
+        RebuildMountedWimTiles(selectedMountDirectory, updateUi: false);
         if (!IsDisposed)
             UpdateSelectedDiskPanel();
         return true;
@@ -937,8 +937,6 @@ public partial class MainForm
 
         WimMountedImageInfo? current = _mountedWims.FirstOrDefault(image =>
             PathsEqual(image.MountDirectory, selected.MountDirectory));
-        RebuildMountedWimTiles(current?.MountDirectory);
-        UpdateSelectedDiskPanel();
 
         if (current == null)
         {
@@ -1076,7 +1074,7 @@ public partial class MainForm
                 if (recover == DialogResult.Yes)
                 {
                     MarkPendingWimUnmount(image);
-                    RebuildMountedWimTiles(image.MountDirectory);
+                    RebuildMountedWimTiles(image.MountDirectory, updateUi: false);
                     UpdateSelectedDiskPanel();
                     await RunPendingWimUnmountAsync(image);
                 }
@@ -1520,7 +1518,6 @@ public partial class MainForm
             progressDialog.Close();
             EndOperation();
             Enabled = true;
-            UpdateSelectedDiskPanel();
             Activate();
         }
 
@@ -1673,7 +1670,6 @@ public partial class MainForm
             progressDialog.Close();
             EndOperation();
             Enabled = true;
-            UpdateSelectedDiskPanel();
             Activate();
         }
 
@@ -2281,13 +2277,21 @@ public partial class MainForm
     private string? RunExplorerPicker(bool save, string title) =>
         RunExplorerPicker(save, title, ".ffu");
 
-    private string? RunExplorerPicker(bool save, string title, string extension) =>
-        RunExplorerPickerCore(save ? "--savefile" : "--openfile", title, extension);
+    private string? RunExplorerPicker(
+        bool save,
+        string title,
+        string extension,
+        string? initialPath = null) =>
+        RunExplorerPickerCore(save ? "--savefile" : "--openfile", title, extension, initialPath);
 
     private string? RunExplorerFolderPicker(string title) =>
-        RunExplorerPickerCore("--selectfolder", title, extension: null);
+        RunExplorerPickerCore("--selectfolder", title, extension: null, initialPath: null);
 
-    private string? RunExplorerPickerCore(string mode, string title, string? extension)
+    private string? RunExplorerPickerCore(
+        string mode,
+        string title,
+        string? extension,
+        string? initialPath = null)
     {
         string pickerPath = Path.Combine(AppContext.BaseDirectory, "ExplorerPicker.exe");
         if (!File.Exists(pickerPath))
@@ -2314,6 +2318,11 @@ public partial class MainForm
             {
                 startInfo.ArgumentList.Add("--filter");
                 startInfo.ArgumentList.Add(extension);
+            }
+            if (!string.IsNullOrWhiteSpace(initialPath))
+            {
+                startInfo.ArgumentList.Add("--initial");
+                startInfo.ArgumentList.Add(initialPath);
             }
             startInfo.ArgumentList.Add("--owner-hwnd");
             startInfo.ArgumentList.Add(Handle.ToInt64().ToString(CultureInfo.InvariantCulture));

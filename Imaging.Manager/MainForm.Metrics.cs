@@ -16,6 +16,7 @@ public partial class MainForm
         ApplyLayoutMetrics();
         RefreshDiskImages();
         RefreshPartitionImages();
+        TrimImageCachesForCurrentDpi();
     }
 
     private void RecalcMetrics()

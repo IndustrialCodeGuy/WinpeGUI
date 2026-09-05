@@ -26,7 +26,7 @@ internal sealed class ImagingOperationCoordinator
         if (string.IsNullOrWhiteSpace(operationName))
             operationName = "Imaging operation";
 
-        string? diskIdentity = disk == null ? null : GetDiskIdentity(disk);
+        string? diskIdentity = disk?.StableIdentity;
         int? diskNumber = disk?.DiskNumber;
 
         lock (_sync)
@@ -44,17 +44,25 @@ internal sealed class ImagingOperationCoordinator
 
     public bool TryGetDiskOperationName(ImagingDiskInfo disk, out string operationName)
     {
-        string diskIdentity = GetDiskIdentity(disk);
+        string diskIdentity = disk.StableIdentity;
 
         lock (_sync)
         {
-            if (_activeOperation != null &&
-                _activeOperation.DiskNumber.HasValue &&
-                (string.Equals(_activeOperation.DiskIdentity, diskIdentity, StringComparison.OrdinalIgnoreCase) ||
-                 _activeOperation.DiskNumber.Value == disk.DiskNumber))
+            if (_activeOperation != null && _activeOperation.DiskNumber.HasValue)
             {
-                operationName = _activeOperation.Name;
-                return true;
+                bool stableIdentityMatches = string.Equals(
+                    _activeOperation.DiskIdentity,
+                    diskIdentity,
+                    StringComparison.OrdinalIgnoreCase);
+                bool numberFallbackMatches =
+                    _activeOperation.DiskIdentity?.StartsWith("number:", StringComparison.OrdinalIgnoreCase) == true &&
+                    _activeOperation.DiskNumber.Value == disk.DiskNumber;
+
+                if (stableIdentityMatches || numberFallbackMatches)
+                {
+                    operationName = _activeOperation.Name;
+                    return true;
+                }
             }
         }
 
@@ -67,23 +75,6 @@ internal sealed class ImagingOperationCoordinator
         lock (_sync)
             _activeOperation = null;
     }
-
-    private static string GetDiskIdentity(ImagingDiskInfo disk)
-    {
-        string stableId = FirstNonEmpty(
-            disk.StorageInfo?.UniqueId,
-            disk.StorageInfo?.Guid,
-            disk.StorageInfo?.SerialNumber,
-            disk.SerialNumber,
-            disk.DevicePath);
-
-        return string.IsNullOrWhiteSpace(stableId)
-            ? $"number:{disk.DiskNumber}"
-            : $"stable:{stableId.Trim()}";
-    }
-
-    private static string FirstNonEmpty(params string?[] values) =>
-        values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
 
     private sealed record ActiveOperation(
         string Name,

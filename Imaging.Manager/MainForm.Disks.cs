@@ -191,8 +191,36 @@ public partial class MainForm
             Text = text,
             UseVisualStyleBackColor = true
         };
-        button.Click += async (_, _) => await action();
+        button.Click += async (_, _) => await RunUiActionAsync(action);
         return button;
+    }
+
+    private async Task RunUiActionAsync(Func<Task> action)
+    {
+        try
+        {
+            await action();
+        }
+        catch (Exception ex)
+        {
+            if (IsDisposed || Disposing)
+                return;
+
+            SetWaitCursorState(false);
+            Enabled = true;
+
+            if (_operationActive)
+                EndOperation();
+            else
+                UpdateSelectedDiskPanel();
+
+            MessageBox.Show(
+                this,
+                $"Imaging Manager encountered an unexpected error.\n\n{ex.Message}",
+                "Imaging Manager",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
     }
 
     private static Color GetInformationTextColor() =>
@@ -297,8 +325,28 @@ public partial class MainForm
         if (IsDisposed || Disposing)
             return Task.CompletedTask;
 
-        _pendingRefreshDiskNumber = selectDiskNumber ?? GetSelectedDisk()?.DiskNumber;
-        _pendingRefreshPartitionNumber = preferredPartitionNumber ?? GetSelectedPartition()?.PartitionNumber;
+        ImagingDiskInfo? selectedDisk = selectDiskNumber.HasValue
+            ? _disks.FirstOrDefault(disk => disk.DiskNumber == selectDiskNumber.Value)
+            : GetSelectedDisk();
+        ImagingPartitionInfo? currentPartition = GetSelectedPartition();
+        ImagingDiskInfo? currentSelectionDisk = GetSelectedDisk();
+        ImagingPartitionInfo? selectedPartition = preferredPartitionNumber.HasValue
+            ? selectedDisk?.Partitions.FirstOrDefault(partition => partition.PartitionNumber == preferredPartitionNumber.Value)
+            : selectDiskNumber.HasValue
+                ? currentSelectionDisk != null &&
+                  selectedDisk != null &&
+                  string.Equals(currentSelectionDisk.StableIdentity, selectedDisk.StableIdentity, StringComparison.OrdinalIgnoreCase)
+                    ? currentPartition
+                    : null
+                : currentPartition;
+
+        _pendingRefreshDiskIdentity = selectedDisk?.StableIdentity;
+        _pendingRefreshDiskNumber = selectDiskNumber ?? selectedDisk?.DiskNumber;
+        _pendingRefreshPartitionIdentity = selectedPartition?.StableIdentity;
+        _pendingRefreshPartitionNumber = preferredPartitionNumber ?? selectedPartition?.PartitionNumber;
+        _pendingRefreshOpticalMountPoint = selectDiskNumber.HasValue || preferredPartitionNumber.HasValue
+            ? null
+            : GetSelectedOpticalVolume()?.MountPoint;
         _pendingRefreshMountedWimDirectory = preferredMountDirectory ?? GetSelectedMountedWim()?.MountDirectory;
         _diskRefreshPending = true;
 
@@ -319,33 +367,39 @@ public partial class MainForm
             {
                 _diskRefreshPending = false;
 
+                string? selectDiskIdentity = _pendingRefreshDiskIdentity;
                 int? selectDiskNumber = _pendingRefreshDiskNumber;
+                string? preferredPartitionIdentity = _pendingRefreshPartitionIdentity;
                 int? preferredPartitionNumber = _pendingRefreshPartitionNumber;
+                string? preferredOpticalMountPoint = _pendingRefreshOpticalMountPoint;
                 string? preferredMountDirectory = _pendingRefreshMountedWimDirectory;
 
-                IReadOnlyList<ImagingDiskInfo> refreshedDisks;
+                ImagingInventorySnapshot refreshedInventory;
                 string loadError = string.Empty;
                 try
                 {
-                    refreshedDisks = await Task.Run(_inventory.GetDisks);
+                    refreshedInventory = await Task.Run(_inventory.GetInventory);
                 }
                 catch (Exception ex)
                 {
-                    refreshedDisks = Array.Empty<ImagingDiskInfo>();
+                    refreshedInventory = new ImagingInventorySnapshot();
                     loadError = ex.Message;
                 }
 
                 if (IsDisposed || Disposing)
                     return;
 
-                _disks = refreshedDisks;
+                _disks = refreshedInventory.Disks;
+                _opticalVolumes = refreshedInventory.OpticalVolumes;
                 _loadError = loadError;
 
                 RebuildDiskTiles(
+                    selectDiskIdentity,
                     selectDiskNumber,
+                    preferredPartitionIdentity,
                     preferredPartitionNumber,
+                    preferredOpticalMountPoint,
                     preferredMountDirectory);
-                ApplyLayoutMetrics();
                 UpdateSelectedDiskPanel();
             }
         }
@@ -358,8 +412,11 @@ public partial class MainForm
     }
 
     private void RebuildDiskTiles(
+        string? selectDiskIdentity,
         int? selectDiskNumber,
+        string? preferredPartitionIdentity,
         int? preferredPartitionNumber,
+        string? preferredOpticalMountPoint = null,
         string? preferredMountDirectory = null)
     {
         _pnlDisks.SetRedrawEnabled(false);
@@ -374,6 +431,8 @@ public partial class MainForm
                 control.Dispose();
             }
 
+            _opticalVolumeRow = null;
+            _pnlOpticalVolumes = null;
             _mountedWimRow = null;
             _pnlMountedWims = null;
 
@@ -385,35 +444,69 @@ public partial class MainForm
                 Panel row = CreateDiskRow(disk);
                 _pnlDisks.Controls.Add(row);
 
-                if (row.Tag is not DiskRowContext context || selectDiskNumber != disk.DiskNumber)
+                bool diskMatches =
+                    (!string.IsNullOrWhiteSpace(selectDiskIdentity) &&
+                     string.Equals(selectDiskIdentity, disk.StableIdentity, StringComparison.OrdinalIgnoreCase)) ||
+                    (string.IsNullOrWhiteSpace(selectDiskIdentity) &&
+                     selectDiskNumber.HasValue &&
+                     selectDiskNumber.Value == disk.DiskNumber);
+
+                if (row.Tag is not DiskRowContext context || !diskMatches)
                     continue;
 
                 preferredDiskTile = context.DiskTile;
-                if (preferredPartitionNumber.HasValue)
+                if (!string.IsNullOrWhiteSpace(preferredPartitionIdentity) || preferredPartitionNumber.HasValue)
                 {
                     preferredPartitionTile = context.PartitionStrip.Controls
                         .OfType<Panel>()
-                        .FirstOrDefault(tile => tile.Tag is PartitionTileContext partitionContext &&
-                                                partitionContext.Partition.PartitionNumber == preferredPartitionNumber.Value);
+                        .FirstOrDefault(tile =>
+                        {
+                            if (tile.Tag is not PartitionTileContext partitionContext)
+                                return false;
+
+                            if (!string.IsNullOrWhiteSpace(preferredPartitionIdentity) &&
+                                string.Equals(
+                                    preferredPartitionIdentity,
+                                    partitionContext.Partition.StableIdentity,
+                                    StringComparison.OrdinalIgnoreCase))
+                            {
+                                return true;
+                            }
+
+                            return string.IsNullOrWhiteSpace(preferredPartitionIdentity) &&
+                                   preferredPartitionNumber.HasValue &&
+                                   partitionContext.Partition.PartitionNumber == preferredPartitionNumber.Value;
+                        });
                 }
+            }
+
+            if (_opticalVolumes.Count > 0)
+            {
+                _opticalVolumeRow = CreateOpticalVolumeRow();
+                _pnlDisks.Controls.Add(_opticalVolumeRow);
+                RebuildOpticalVolumeTiles(preferredOpticalMountPoint, updateUi: false);
             }
 
             _mountedWimRow = CreateMountedWimRow();
             _pnlDisks.Controls.Add(_mountedWimRow);
-            RebuildMountedWimTiles(preferredMountDirectory);
+            RebuildMountedWimTiles(preferredMountDirectory, updateUi: false);
 
-            if (_selectedMountedWimTile != null)
+            if (_selectedMountedWimTile != null || _selectedOpticalVolumeTile != null)
             {
-                // RebuildMountedWimTiles restored the mounted-image selection.
+                // The auxiliary-row rebuild restored the previous selection.
             }
             else if (preferredPartitionTile != null)
-                SelectPartitionTile(preferredPartitionTile);
+                SelectPartitionTile(preferredPartitionTile, updateUi: false);
             else if (preferredDiskTile != null)
-                SelectDiskTile(preferredDiskTile);
+                SelectDiskTile(preferredDiskTile, updateUi: false);
             else if (_pnlDisks.Controls.OfType<Panel>()
                          .Select(row => row.Tag as DiskRowContext)
                          .FirstOrDefault(context => context != null)?.DiskTile is Panel firstDiskTile)
-                SelectDiskTile(firstDiskTile);
+                SelectDiskTile(firstDiskTile, updateUi: false);
+            else if (_pnlOpticalVolumes?.Controls.OfType<Panel>().FirstOrDefault() is Panel firstOpticalTile)
+                SelectOpticalVolumeTile(firstOpticalTile, updateUi: false);
+
+            LayoutDiskTiles();
         }
         finally
         {
@@ -637,7 +730,167 @@ public partial class MainForm
     }
 
     private bool IsSelectedTile(Panel tile) =>
-        _selectedDiskTile == tile || _selectedPartitionTile == tile || _selectedMountedWimTile == tile;
+        _selectedDiskTile == tile ||
+        _selectedPartitionTile == tile ||
+        _selectedOpticalVolumeTile == tile ||
+        _selectedMountedWimTile == tile;
+
+    private Panel CreateOpticalVolumeRow()
+    {
+        Panel row = new()
+        {
+            Width = GetDiskRowWidth(),
+            Height = _mPx.DiskRowHeight,
+            Margin = new Padding(0, 0, 0, _mPx.DiskRowGap),
+            Padding = new Padding(0),
+            BackColor = ShellTheme.WindowBack
+        };
+
+        Panel header = new()
+        {
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = ShellTheme.ContentBack
+        };
+        Label name = new()
+        {
+            Text = "Optical Media",
+            ForeColor = ShellTheme.TextColor,
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true,
+            UseMnemonic = false
+        };
+        Label sub = new()
+        {
+            Text = GetOpticalVolumeCountText(),
+            ForeColor = ShellTheme.TextColor,
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true,
+            UseMnemonic = false
+        };
+        header.Controls.Add(name);
+        header.Controls.Add(sub);
+
+        _pnlOpticalVolumes = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            AutoScroll = true,
+            Padding = new Padding(0),
+            Margin = new Padding(0),
+            BackColor = ShellTheme.ContentBack,
+            BorderStyle = BorderStyle.FixedSingle
+        };
+        _pnlOpticalVolumes.Resize += (_, _) => LayoutOpticalVolumeTiles();
+
+        row.Controls.Add(header);
+        row.Controls.Add(_pnlOpticalVolumes);
+        LayoutOpticalVolumeRow(row);
+        return row;
+    }
+
+    private string GetOpticalVolumeCountText() => _opticalVolumes.Count switch
+    {
+        1 => "1 mounted",
+        _ => $"{_opticalVolumes.Count} mounted"
+    };
+
+    private void RebuildOpticalVolumeTiles(string? preferredMountPoint = null, bool updateUi = true)
+    {
+        if (_pnlOpticalVolumes == null || _pnlOpticalVolumes.IsDisposed)
+            return;
+
+        string? desiredMount = preferredMountPoint ?? GetSelectedOpticalVolume()?.MountPoint;
+        _selectedOpticalVolumeTile = null;
+
+        _pnlOpticalVolumes.SuspendLayout();
+        try
+        {
+            while (_pnlOpticalVolumes.Controls.Count > 0)
+            {
+                Control control = _pnlOpticalVolumes.Controls[0];
+                _pnlOpticalVolumes.Controls.RemoveAt(0);
+                control.Dispose();
+            }
+
+            Panel? preferredTile = null;
+            foreach (ImagingVolumeInfo volume in _opticalVolumes)
+            {
+                Panel tile = CreateOpticalVolumeTile(volume);
+                _pnlOpticalVolumes.Controls.Add(tile);
+                if (!string.IsNullOrWhiteSpace(desiredMount) &&
+                    string.Equals(volume.MountPoint, desiredMount, StringComparison.OrdinalIgnoreCase))
+                {
+                    preferredTile = tile;
+                }
+            }
+
+            LayoutOpticalVolumeTiles();
+            if (preferredTile != null)
+                SelectOpticalVolumeTile(preferredTile, updateUi);
+        }
+        finally
+        {
+            _pnlOpticalVolumes.ResumeLayout(true);
+        }
+    }
+
+    private Panel CreateOpticalVolumeTile(ImagingVolumeInfo volume)
+    {
+        Panel tile = new()
+        {
+            Width = 1,
+            Height = _mPx.DiskRowHeight,
+            Margin = new Padding(0),
+            Padding = new Padding(0),
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = ShellTheme.ContentBack,
+            ForeColor = ShellTheme.TextColor,
+            Cursor = Cursors.Hand,
+            Tag = volume
+        };
+
+        PictureBox picture = new()
+        {
+            SizeMode = PictureBoxSizeMode.CenterImage,
+            Image = GetPartitionImageForKind(DriveVisualKind.Optical, _mPx.PartitionTileIconSize),
+            Cursor = Cursors.Hand
+        };
+
+        string root = volume.MountPoint.TrimEnd('\\');
+        Label name = new()
+        {
+            Text = string.IsNullOrWhiteSpace(volume.VolumeLabel)
+                ? $"{root} — CD Drive"
+                : $"{root} — {volume.VolumeLabel}",
+            ForeColor = ShellTheme.TextColor,
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true,
+            UseMnemonic = false,
+            Cursor = Cursors.Hand
+        };
+
+        string details = volume.TotalSizeBytes > 0
+            ? $"CD Drive · {FormatBytes(volume.TotalSizeBytes)}"
+            : "CD Drive";
+        Label sub = new()
+        {
+            Text = details,
+            ForeColor = ShellTheme.TextColor,
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true,
+            UseMnemonic = false,
+            Cursor = Cursors.Hand
+        };
+
+        void select(object? _, EventArgs __) => SelectOpticalVolumeTile(tile);
+        WireSelectableTile(tile, select, picture, name, sub);
+
+        tile.Controls.Add(picture);
+        tile.Controls.Add(name);
+        tile.Controls.Add(sub);
+        LayoutOpticalVolumeTile(tile);
+        return tile;
+    }
 
     private Panel CreateMountedWimRow()
     {
@@ -699,7 +952,7 @@ public partial class MainForm
         _ => $"{_mountedWims.Count} images"
     };
 
-    private void RebuildMountedWimTiles(string? preferredMountDirectory = null)
+    private void RebuildMountedWimTiles(string? preferredMountDirectory = null, bool updateUi = true)
     {
         if (_pnlMountedWims == null || _pnlMountedWims.IsDisposed)
             return;
@@ -736,7 +989,7 @@ public partial class MainForm
 
             LayoutMountedWimTiles();
             if (preferredTile != null)
-                SelectMountedWimTile(preferredTile);
+                SelectMountedWimTile(preferredTile, updateUi);
         }
         finally
         {
@@ -805,6 +1058,8 @@ public partial class MainForm
             row.Height = _mPx.DiskRowHeight;
             if (row.Tag is DiskRowContext)
                 LayoutDiskRow(row);
+            else if (row == _opticalVolumeRow)
+                LayoutOpticalVolumeRow(row);
             else if (row == _mountedWimRow)
                 LayoutMountedWimRow(row);
         }
@@ -844,19 +1099,28 @@ public partial class MainForm
         LayoutPartitionStrip(context.PartitionStrip, context.Disk);
     }
 
-    private void LayoutMountedWimRow(Panel row)
+    private void LayoutOpticalVolumeRow(Panel row) =>
+        LayoutAuxiliaryRow(row, _pnlOpticalVolumes, LayoutOpticalVolumeTiles);
+
+    private void LayoutMountedWimRow(Panel row) =>
+        LayoutAuxiliaryRow(row, _pnlMountedWims, LayoutMountedWimTiles);
+
+    private void LayoutAuxiliaryRow(
+        Panel row,
+        FlowLayoutPanel? contentPanel,
+        Action layoutTiles)
     {
-        if (_pnlMountedWims == null)
+        if (contentPanel == null)
             return;
 
-        Panel? header = row.Controls.OfType<Panel>().FirstOrDefault(panel => panel != _pnlMountedWims);
+        Panel? header = row.Controls.OfType<Panel>().FirstOrDefault(panel => panel != contentPanel);
         if (header == null)
             return;
 
         int gap = _mPx.DiskRowInnerGap;
         SetBoundsIfChanged(header, 0, 0, _mPx.DiskHeaderWidth, _mPx.DiskRowHeight);
         SetBoundsIfChanged(
-            _pnlMountedWims,
+            contentPanel,
             _mPx.DiskHeaderWidth + gap,
             0,
             Math.Max(1, row.ClientSize.Width - _mPx.DiskHeaderWidth - gap),
@@ -870,7 +1134,7 @@ public partial class MainForm
         if (labels.Length > 1)
             SetBoundsIfChanged(labels[1], textLeft, _mPx.DiskTileSubTop, textWidth, _mPx.DiskTileSubHeight);
 
-        LayoutMountedWimTiles();
+        layoutTiles();
     }
 
     private void LayoutDiskTile(Panel tile)
@@ -950,17 +1214,25 @@ public partial class MainForm
             SetBoundsIfChanged(labels[2], lineLeft, _mPx.PartitionTileUsedTop, lineWidth, _mPx.PartitionTileUsedHeight);
     }
 
-    private void LayoutMountedWimTiles()
+    private void LayoutOpticalVolumeTiles() =>
+        LayoutEvenTiles(_pnlOpticalVolumes, LayoutOpticalVolumeTile);
+
+    private void LayoutMountedWimTiles() =>
+        LayoutEvenTiles(_pnlMountedWims, LayoutMountedWimTile);
+
+    private static void LayoutEvenTiles(
+        FlowLayoutPanel? panel,
+        Action<Panel> layoutTile)
     {
-        if (_pnlMountedWims == null || _pnlMountedWims.IsDisposed)
+        if (panel == null || panel.IsDisposed)
             return;
 
-        Panel[] tiles = _pnlMountedWims.Controls.OfType<Panel>().ToArray();
+        Panel[] tiles = panel.Controls.OfType<Panel>().ToArray();
         if (tiles.Length == 0)
             return;
 
-        int tileHeight = Math.Max(1, _pnlMountedWims.ClientSize.Height);
-        int available = Math.Max(1, _pnlMountedWims.ClientSize.Width);
+        int tileHeight = Math.Max(1, panel.ClientSize.Height);
+        int available = Math.Max(1, panel.ClientSize.Width);
         int baseWidth = Math.Max(1, available / tiles.Length);
         int remainder = Math.Max(0, available - (baseWidth * tiles.Length));
 
@@ -969,8 +1241,26 @@ public partial class MainForm
             Panel tile = tiles[i];
             tile.Width = baseWidth + (i < remainder ? 1 : 0);
             tile.Height = tileHeight;
-            LayoutMountedWimTile(tile);
+            layoutTile(tile);
         }
+    }
+
+    private void LayoutOpticalVolumeTile(Panel tile)
+    {
+        PictureBox? picture = tile.Controls.OfType<PictureBox>().FirstOrDefault();
+        Label[] labels = tile.Controls.OfType<Label>().ToArray();
+        int iconLeft = _mPx.PartitionTilePadX;
+        int nameLeft = iconLeft + _mPx.PartitionTileIconSize + _mPx.PartitionTileTextGap;
+        int nameWidth = Math.Max(0, tile.ClientSize.Width - nameLeft - _mPx.PartitionTilePadX);
+        int lineLeft = _mPx.PartitionTilePadX;
+        int lineWidth = Math.Max(0, tile.ClientSize.Width - (_mPx.PartitionTilePadX * 2));
+
+        if (picture != null)
+            SetBoundsIfChanged(picture, iconLeft, _mPx.PartitionTileIconTop, _mPx.PartitionTileIconSize, _mPx.PartitionTileIconSize);
+        if (labels.Length > 0)
+            SetBoundsIfChanged(labels[0], nameLeft, _mPx.PartitionTileNameTop, nameWidth, _mPx.PartitionTileNameHeight);
+        if (labels.Length > 1)
+            SetBoundsIfChanged(labels[1], lineLeft, _mPx.PartitionTileSubTop, lineWidth, _mPx.PartitionTileSubHeight);
     }
 
     private void LayoutMountedWimTile(Panel tile)
@@ -1090,21 +1380,14 @@ public partial class MainForm
 
     private static DriveVisualKind GetPlainPartitionVisualKind(ImagingPartitionInfo partition, bool isSystemVolume)
     {
-        foreach (string mountPoint in partition.DriveLetters)
+        foreach (ImagingVolumeInfo partitionVolume in partition.Volumes)
         {
-            try
-            {
-                DriveType driveType = new DriveInfo(mountPoint).DriveType;
-                if (driveType == DriveType.CDRom)
-                    return DriveVisualKind.Optical;
-                if (driveType == DriveType.Network)
-                    return DriveVisualKind.Network;
-                if (driveType == DriveType.Removable)
-                    return DriveVisualKind.Removable;
-            }
-            catch
-            {
-            }
+            if (partitionVolume.DriveType == DriveType.CDRom)
+                return DriveVisualKind.Optical;
+            if (partitionVolume.DriveType == DriveType.Network)
+                return DriveVisualKind.Network;
+            if (partitionVolume.DriveType == DriveType.Removable)
+                return DriveVisualKind.Removable;
         }
 
         return isSystemVolume ? DriveVisualKind.System : DriveVisualKind.Fixed;
@@ -1112,14 +1395,14 @@ public partial class MainForm
 
     private static bool IsSystemVisualPartition(ImagingPartitionInfo partition, ImagingBitLockerVolumeInfo? volume)
     {
-        foreach (string mountPoint in partition.DriveLetters)
-        {
-            if (DriveSystemDetector.IsSystemVisualDrive(mountPoint))
-                return true;
-        }
+        bool hasSystemVisualVolume = PlatformDetect.IsWinPE
+            ? partition.Volumes.Any(static item => item.ContainsOfflineWindowsInstall)
+            : partition.Volumes.Any(static item => item.IsRunningSystemDrive);
+        if (hasSystemVisualVolume)
+            return true;
 
         return volume?.IsSystemVolume == true &&
-               !partition.DriveLetters.Any(static mountPoint => DriveSystemDetector.IsRunningSystemDrive(mountPoint));
+               !partition.Volumes.Any(static item => item.IsRunningSystemDrive);
     }
 
     private void RefreshPartitionImages()
@@ -1142,50 +1425,127 @@ public partial class MainForm
                     picture.Image = GetPartitionImage(partitionContext.Partition);
             }
         }
+
+        if (_pnlOpticalVolumes != null && !_pnlOpticalVolumes.IsDisposed)
+        {
+            Image opticalImage = GetPartitionImageForKind(DriveVisualKind.Optical, _mPx.PartitionTileIconSize);
+            foreach (Panel tile in _pnlOpticalVolumes.Controls.OfType<Panel>())
+            {
+                PictureBox? picture = tile.Controls.OfType<PictureBox>().FirstOrDefault();
+                if (picture != null)
+                    picture.Image = opticalImage;
+            }
+        }
     }
 
-    private void SelectDiskTile(Panel tile)
+    private void TrimImageCachesForCurrentDpi()
     {
-        if (_selectedDiskTile == tile && _selectedPartitionTile == null && _selectedMountedWimTile == null)
-            return;
+        Image[] obsoleteDiskImages = _diskImagesBySize
+            .Where(pair => pair.Key != _mPx.DiskTileIconSize)
+            .Select(static pair => pair.Value)
+            .Distinct()
+            .ToArray();
+        foreach (int key in _diskImagesBySize.Keys.Where(key => key != _mPx.DiskTileIconSize).ToArray())
+            _diskImagesBySize.Remove(key);
 
+        Image[] obsoletePartitionImages = _partitionImagesByKind
+            .Where(pair => pair.Key.Size != _mPx.PartitionTileIconSize)
+            .Select(static pair => pair.Value)
+            .Distinct()
+            .ToArray();
+        foreach (var key in _partitionImagesByKind.Keys
+                     .Where(key => key.Size != _mPx.PartitionTileIconSize)
+                     .ToArray())
+        {
+            _partitionImagesByKind.Remove(key);
+        }
+
+        HashSet<Image> retained = _diskImagesBySize.Values
+            .Concat(_partitionImagesByKind.Values)
+            .ToHashSet();
+
+        foreach (Image image in obsoleteDiskImages.Concat(obsoletePartitionImages).Distinct())
+        {
+            if (!retained.Contains(image))
+                image.Dispose();
+        }
+    }
+
+    private void SelectDiskTile(Panel tile, bool updateUi = true)
+    {
+        if (_selectedDiskTile == tile &&
+            _selectedPartitionTile == null &&
+            _selectedOpticalVolumeTile == null &&
+            _selectedMountedWimTile == null)
+        {
+            return;
+        }
+
+        ClearOpticalVolumeSelection();
         ClearMountedWimSelection();
         ClearDiskAndPartitionSelection();
         _selectedDiskTile = tile;
         tile.BackColor = ShellTheme.ItemSelectedBack;
-        UpdateSelectedDiskPanel();
+        if (updateUi)
+            UpdateSelectedDiskPanel();
     }
 
-    private void SelectPartitionTile(Panel tile)
+    private void SelectPartitionTile(Panel tile, bool updateUi = true)
     {
         if (tile.Tag is not PartitionTileContext)
             return;
 
-        if (_selectedPartitionTile == tile && _selectedMountedWimTile == null)
+        if (_selectedPartitionTile == tile &&
+            _selectedOpticalVolumeTile == null &&
+            _selectedMountedWimTile == null)
+        {
             return;
+        }
 
+        ClearOpticalVolumeSelection();
         ClearMountedWimSelection();
         ClearDiskAndPartitionSelection();
         _selectedPartitionTile = tile;
         tile.BackColor = ShellTheme.ItemSelectedBack;
-        UpdateSelectedDiskPanel();
+        if (updateUi)
+            UpdateSelectedDiskPanel();
     }
 
-    private void SelectMountedWimTile(Panel tile)
+    private void SelectOpticalVolumeTile(Panel tile, bool updateUi = true)
+    {
+        if (tile.Tag is not ImagingVolumeInfo)
+            return;
+
+        if (_selectedOpticalVolumeTile == tile)
+            return;
+
+        ClearDiskAndPartitionSelection();
+        ClearMountedWimSelection();
+        ClearOpticalVolumeSelection();
+        _selectedOpticalVolumeTile = tile;
+        tile.BackColor = ShellTheme.ItemSelectedBack;
+        if (updateUi)
+            UpdateSelectedDiskPanel();
+    }
+
+    private void SelectMountedWimTile(Panel tile, bool updateUi = true)
     {
         if (_selectedMountedWimTile == tile)
             return;
 
         ClearDiskAndPartitionSelection();
+        ClearOpticalVolumeSelection();
         ClearMountedWimSelection();
         _selectedMountedWimTile = tile;
         tile.BackColor = ShellTheme.ItemSelectedBack;
-        UpdateSelectedDiskPanel();
+        if (updateUi)
+            UpdateSelectedDiskPanel();
     }
 
     private void ClearSelectionVisuals()
     {
         ClearDiskAndPartitionSelection();
+        ClearOpticalVolumeSelection();
         ClearMountedWimSelection();
     }
 
@@ -1198,6 +1558,13 @@ public partial class MainForm
 
         _selectedPartitionTile = null;
         _selectedDiskTile = null;
+    }
+
+    private void ClearOpticalVolumeSelection()
+    {
+        if (_selectedOpticalVolumeTile != null && !_selectedOpticalVolumeTile.IsDisposed)
+            _selectedOpticalVolumeTile.BackColor = ShellTheme.ContentBack;
+        _selectedOpticalVolumeTile = null;
     }
 
     private void ClearMountedWimSelection()
@@ -1217,6 +1584,9 @@ public partial class MainForm
 
     private ImagingPartitionInfo? GetSelectedPartition() =>
         (_selectedPartitionTile?.Tag as PartitionTileContext)?.Partition;
+
+    private ImagingVolumeInfo? GetSelectedOpticalVolume() =>
+        _selectedOpticalVolumeTile?.Tag as ImagingVolumeInfo;
 
     private WimMountedImageInfo? GetSelectedMountedWim() =>
         _selectedMountedWimTile?.Tag as WimMountedImageInfo;
@@ -1243,14 +1613,14 @@ public partial class MainForm
 
     private static bool TryGetPartitionCaptureRoot(ImagingPartitionInfo partition, out string root)
     {
-        foreach (string drive in partition.DriveLetters)
+        ImagingVolumeInfo? volume = partition.Volumes.FirstOrDefault(static item =>
+            item.IsReady &&
+            item.MountPoint.Length > 0 &&
+            item.DriveType is not DriveType.CDRom and not DriveType.Network);
+        if (volume != null)
         {
-            string normalized = ImagingPath.NormalizeDriveRoot(drive);
-            if (normalized.Length > 0 && Directory.Exists(normalized))
-            {
-                root = normalized;
-                return true;
-            }
+            root = volume.MountPoint;
+            return true;
         }
 
         root = string.Empty;
@@ -1270,27 +1640,11 @@ public partial class MainForm
 
     private static string GetPartitionUsedLine(ImagingPartitionInfo partition)
     {
-        foreach (string drive in partition.DriveLetters)
-        {
-            try
-            {
-                string root = ImagingPath.NormalizeDriveRoot(drive);
-                if (root.Length == 0)
-                    continue;
-
-                DriveInfo info = new(root);
-                if (!info.IsReady || info.TotalSize <= 0)
-                    continue;
-
-                long used = Math.Max(0, info.TotalSize - info.TotalFreeSpace);
-                return $"Used: {FormatBytes((ulong)used)}";
-            }
-            catch
-            {
-            }
-        }
-
-        return "Used: —";
+        ImagingVolumeInfo? volume = partition.Volumes.FirstOrDefault(static item =>
+            item.IsReady && item.TotalSizeBytes > 0);
+        return volume == null
+            ? "Used: —"
+            : $"Used: {FormatBytes(volume.UsedSpaceBytes)}";
     }
 
     private static bool IsMountedWimStatus(WimMountedImageInfo image, string status) =>
@@ -1348,10 +1702,12 @@ public partial class MainForm
     {
         ImagingDiskInfo? disk = GetSelectedDisk();
         ImagingPartitionInfo? partition = GetSelectedPartition();
+        ImagingVolumeInfo? opticalVolume = GetSelectedOpticalVolume();
         WimMountedImageInfo? mountedWim = GetSelectedMountedWim();
 
-        bool diskSelectionActive = disk != null && partition == null && mountedWim == null;
-        bool partitionSelectionActive = disk != null && partition != null && mountedWim == null;
+        bool diskSelectionActive = disk != null && partition == null && opticalVolume == null && mountedWim == null;
+        bool partitionSelectionActive = disk != null && partition != null && opticalVolume == null && mountedWim == null;
+        bool opticalSelectionActive = opticalVolume != null;
         bool mountedWimSelectionActive = mountedWim != null;
         bool mountedWimPendingUnmount = mountedWimSelectionActive &&
                                         IsPendingWimUnmount(mountedWim!);
@@ -1383,7 +1739,7 @@ public partial class MainForm
         _btnCleanupMounts.Enabled = actionsAvailable && anyInvalidMountedWim;
         _btnRefresh.Enabled = actionsAvailable;
 
-        _btnGetInfo.Visible = diskSelectionActive || partitionSelectionActive || mountedWimSelectionActive;
+        _btnGetInfo.Visible = diskSelectionActive || partitionSelectionActive || opticalSelectionActive || mountedWimSelectionActive;
         _btnCapture.Visible = diskSelectionActive;
         _btnApply.Visible = diskSelectionActive;
         _btnDeployWim.Visible = diskSelectionActive;
@@ -1414,11 +1770,13 @@ public partial class MainForm
 
         _lblSelectionContext.Text = mountedWimSelectionActive
             ? mountedWim!.DisplayName
-            : partitionSelectionActive
-                ? GetPartitionDisplayName(partition!) + selectionBusySuffix
-                : diskSelectionActive
-                    ? $"Disk {disk!.DiskNumber}" + selectionBusySuffix
-                    : "Select a disk, partition, or mounted WIM";
+            : opticalSelectionActive
+                ? $"{opticalVolume!.DisplayName} — CD Drive"
+                : partitionSelectionActive
+                    ? GetPartitionDisplayName(partition!) + selectionBusySuffix
+                    : diskSelectionActive
+                        ? $"Disk {disk!.DiskNumber}" + selectionBusySuffix
+                        : "Select a disk, partition, optical volume, or mounted WIM";
 
         LayoutGlobalActionStrip(_mPx.DetailButtonWidth, _mPx.DetailButtonHeight, _mPx.DetailButtonGap);
         LayoutContextActionStrip(_mPx.DetailButtonWidth, _mPx.DetailButtonHeight, _mPx.DetailButtonGap);
@@ -1427,17 +1785,18 @@ public partial class MainForm
 
     private static bool TryGetOfflineWindowsRoot(ImagingPartitionInfo partition, out string root)
     {
-        if (!TryGetPartitionCaptureRoot(partition, out root))
-            return false;
-
-        if (DriveSystemDetector.IsRunningSystemDrive(root) ||
-            !DriveSystemDetector.ContainsOfflineWindowsInstall(root))
+        ImagingVolumeInfo? volume = partition.Volumes.FirstOrDefault(static item =>
+            item.IsReady &&
+            !item.IsRunningSystemDrive &&
+            item.ContainsOfflineWindowsInstall);
+        if (volume != null)
         {
-            root = string.Empty;
-            return false;
+            root = volume.MountPoint;
+            return true;
         }
 
-        return true;
+        root = string.Empty;
+        return false;
     }
 
     private void ShowSelectedInfo()
@@ -1449,6 +1808,11 @@ public partial class MainForm
         {
             title = "Mounted WIM Information";
             details = BuildMountedWimDetails(mountedWim);
+        }
+        else if (GetSelectedOpticalVolume() is ImagingVolumeInfo opticalVolume)
+        {
+            title = $"{opticalVolume.MountPoint.TrimEnd('\\')} Optical Media Information";
+            details = BuildOpticalVolumeDetails(opticalVolume);
         }
         else if (GetSelectedPartition() is ImagingPartitionInfo partition)
         {
@@ -1617,6 +1981,25 @@ public partial class MainForm
         return text.ToString().TrimEnd();
     }
 
+    private static string BuildOpticalVolumeDetails(ImagingVolumeInfo volume)
+    {
+        StringBuilder text = new();
+        AppendInfoSection(text, "Optical Media");
+        AppendInfoLine(text, "Drive", volume.MountPoint.TrimEnd('\\'));
+        AppendInfoLine(text, "Drive type", "CD Drive");
+        AppendInfoLine(text, "Ready", volume.IsReady ? "Yes" : "No");
+        if (volume.IsReady)
+        {
+            AppendInfoLine(text, "Label", volume.VolumeLabel);
+            AppendInfoLine(text, "File system", volume.DriveFormat);
+            AppendInfoLine(text, "Total", FormatBytes(volume.TotalSizeBytes));
+            AppendInfoLine(text, "Used", FormatBytes(volume.UsedSpaceBytes));
+            AppendInfoLine(text, "Free", FormatBytes(volume.TotalFreeSpaceBytes));
+        }
+
+        return text.ToString().TrimEnd();
+    }
+
     private string BuildMountedWimDetails(WimMountedImageInfo image)
     {
         StringBuilder text = new();
@@ -1689,42 +2072,24 @@ public partial class MainForm
 
     private static void AppendVolumeDetails(StringBuilder text, ImagingPartitionInfo partition)
     {
-        if (partition.DriveLetters.Count == 0)
+        if (partition.Volumes.Count == 0)
             return;
 
-        bool wroteSection = false;
-        foreach (string drive in partition.DriveLetters)
+        AppendInfoSection(text, "Volume");
+        foreach (ImagingVolumeInfo volume in partition.Volumes)
         {
-            try
-            {
-                string root = ImagingPath.NormalizeDriveRoot(drive);
-                if (root.Length == 0)
-                    continue;
+            text.AppendLine(volume.MountPoint.TrimEnd('\\'));
+            AppendInfoLine(text, "  Ready", volume.IsReady ? "Yes" : "No");
+            AppendInfoLine(text, "  Drive type", volume.DriveType.ToString());
+            if (!volume.IsReady)
+                continue;
 
-                DriveInfo info = new(root);
-                if (!wroteSection)
-                {
-                    AppendInfoSection(text, "Volume");
-                    wroteSection = true;
-                }
-
-                text.AppendLine(root.TrimEnd('\\'));
-                AppendInfoLine(text, "  Ready", info.IsReady ? "Yes" : "No");
-                AppendInfoLine(text, "  Drive type", info.DriveType.ToString());
-                if (!info.IsReady)
-                    continue;
-
-                AppendInfoLine(text, "  Label", info.VolumeLabel);
-                AppendInfoLine(text, "  File system", info.DriveFormat);
-                AppendInfoLine(text, "  Total", FormatBytes((ulong)Math.Max(0, info.TotalSize)));
-                AppendInfoLine(text, "  Used", FormatBytes((ulong)Math.Max(0, info.TotalSize - info.TotalFreeSpace)));
-                AppendInfoLine(text, "  Free", FormatBytes((ulong)Math.Max(0, info.TotalFreeSpace)));
-                AppendInfoLine(text, "  Available free", FormatBytes((ulong)Math.Max(0, info.AvailableFreeSpace)));
-            }
-            catch
-            {
-                // The partition may be locked or otherwise inaccessible in WinPE.
-            }
+            AppendInfoLine(text, "  Label", volume.VolumeLabel);
+            AppendInfoLine(text, "  File system", volume.DriveFormat);
+            AppendInfoLine(text, "  Total", FormatBytes(volume.TotalSizeBytes));
+            AppendInfoLine(text, "  Used", FormatBytes(volume.UsedSpaceBytes));
+            AppendInfoLine(text, "  Free", FormatBytes(volume.TotalFreeSpaceBytes));
+            AppendInfoLine(text, "  Available free", FormatBytes(volume.AvailableFreeSpaceBytes));
         }
     }
 
@@ -1776,7 +2141,7 @@ public partial class MainForm
 
         if (_initialInventoryLoading)
         {
-            _lblStatus.Text = "Loading disk and mounted WIM inventory...";
+            _lblStatus.Text = "Loading storage and mounted WIM inventory...";
             _lblStatus.Visible = true;
         }
         else if (!string.IsNullOrWhiteSpace(_loadError))
@@ -1784,9 +2149,9 @@ public partial class MainForm
             _lblStatus.Text = _loadError;
             _lblStatus.Visible = true;
         }
-        else if (_disks.Count == 0)
+        else if (_disks.Count == 0 && _opticalVolumes.Count == 0 && _mountedWims.Count == 0)
         {
-            _lblStatus.Text = "No physical disks found.";
+            _lblStatus.Text = "No physical disks, mounted optical media, or mounted WIMs found.";
             _lblStatus.Visible = true;
         }
         else
