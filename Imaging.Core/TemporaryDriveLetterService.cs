@@ -5,12 +5,15 @@ namespace Imaging.Core;
 
 public sealed class TemporaryDriveLetterService
 {
+    private static readonly object ReservationSync = new();
+    private static readonly HashSet<char> ReservedLetters = new();
+
     public TemporaryDriveLetterResult Assign(int diskNumber, int partitionNumber)
     {
         char letter;
         try
         {
-            letter = FindAvailableDriveLetter();
+            letter = ReserveAvailable().DriveLetter;
         }
         catch (Exception ex)
         {
@@ -29,6 +32,7 @@ public sealed class TemporaryDriveLetterService
         }
         catch (Exception ex)
         {
+            ReleaseReservation(letter);
             return TemporaryDriveLetterResult.Failed(ex.Message);
         }
 
@@ -49,6 +53,9 @@ public sealed class TemporaryDriveLetterService
                     error += "\n\n" + cleanupError;
             }
 
+            if (!Directory.Exists(root))
+                ReleaseReservation(letter);
+
             return TemporaryDriveLetterResult.Failed(error);
         }
 
@@ -60,6 +67,40 @@ public sealed class TemporaryDriveLetterService
             DriveLetter = letter,
             Root = root
         };
+    }
+
+    public TemporaryDriveLetterReservation ReserveAvailable(params char[] excludedLetters)
+    {
+        HashSet<char> excluded = excludedLetters
+            .Select(char.ToUpperInvariant)
+            .Where(static letter => letter is >= 'A' and <= 'Z')
+            .ToHashSet();
+
+        char letter = FindAndReserveAvailableDriveLetter(preferHigh: true, excluded);
+        return new TemporaryDriveLetterReservation(letter);
+    }
+
+    public TemporaryDriveLetterReservation ReserveLowestAvailable(params char[] excludedLetters)
+    {
+        HashSet<char> excluded = excludedLetters
+            .Select(char.ToUpperInvariant)
+            .Where(static letter => letter is >= 'A' and <= 'Z')
+            .ToHashSet();
+
+        char letter = FindAndReserveAvailableDriveLetter(preferHigh: false, excluded);
+        return new TemporaryDriveLetterReservation(letter);
+    }
+
+    public void Release(TemporaryDriveLetterReservation reservation)
+    {
+        ArgumentNullException.ThrowIfNull(reservation);
+        ReleaseReservation(reservation.DriveLetter);
+    }
+
+    public void ReleaseReservation(TemporaryDriveLetterResult assignment)
+    {
+        if (assignment.Success)
+            ReleaseReservation(assignment.DriveLetter);
     }
 
     public string? Remove(TemporaryDriveLetterResult assignment)
@@ -86,36 +127,75 @@ public sealed class TemporaryDriveLetterService
 
             if (remove.ExitCode != 0 || Directory.Exists(root))
             {
+                if (!Directory.Exists(root))
+                    ReleaseReservation(letter);
+
                 return BuildProcessFailure(
                     $"DiskPart could not remove the temporary {letter}: drive letter from Disk {diskNumber}, Partition {partitionNumber}.",
                     remove);
             }
 
+            ReleaseReservation(letter);
             return null;
         }
         catch (Exception ex)
         {
+            if (!Directory.Exists(root))
+                ReleaseReservation(letter);
+
             return $"DiskPart could not remove the temporary {letter}: drive letter from Disk {diskNumber}, Partition {partitionNumber}.\n\n{ex.Message}";
         }
     }
 
-    private static char FindAvailableDriveLetter()
+    private static char FindAndReserveAvailableDriveLetter(bool preferHigh, HashSet<char> excluded)
     {
-        HashSet<char> used = Directory.GetLogicalDrives()
-            .Where(static d => d.Length >= 2 && d[1] == ':')
-            .Select(static d => char.ToUpperInvariant(d[0]))
-            .ToHashSet();
-
-        for (char letter = 'Z'; letter >= 'D'; letter--)
+        lock (ReservationSync)
         {
-            if (letter == 'X')
-                continue;
-            if (!used.Contains(letter))
-                return letter;
+            HashSet<char> used = Directory.GetLogicalDrives()
+                .Where(static d => d.Length >= 2 && d[1] == ':')
+                .Select(static d => char.ToUpperInvariant(d[0]))
+                .ToHashSet();
+
+            foreach (char reserved in ReservedLetters)
+                used.Add(reserved);
+            foreach (char excludedLetter in excluded)
+                used.Add(excludedLetter);
+
+            if (preferHigh)
+            {
+                for (char letter = 'Z'; letter >= 'D'; letter--)
+                {
+                    if (letter == 'X' || used.Contains(letter))
+                        continue;
+
+                    ReservedLetters.Add(letter);
+                    return letter;
+                }
+            }
+            else
+            {
+                for (char letter = 'D'; letter <= 'Z'; letter++)
+                {
+                    if (letter == 'X' || used.Contains(letter))
+                        continue;
+
+                    ReservedLetters.Add(letter);
+                    return letter;
+                }
+            }
         }
 
         throw new InvalidOperationException(
-            "No unused drive letter is available for temporarily mounting the selected partition.");
+            "No unused drive letter is available for this operation.");
+    }
+
+    private static void ReleaseReservation(char letter)
+    {
+        if (letter == '\0')
+            return;
+
+        lock (ReservationSync)
+            ReservedLetters.Remove(char.ToUpperInvariant(letter));
     }
 
     private static ProcessResult RunDiskPart(string script)
@@ -174,6 +254,17 @@ public sealed class TemporaryDriveLetterService
     }
 
     private readonly record struct ProcessResult(int ExitCode, string StandardOutput, string StandardError);
+}
+
+public sealed class TemporaryDriveLetterReservation
+{
+    internal TemporaryDriveLetterReservation(char driveLetter)
+    {
+        DriveLetter = char.ToUpperInvariant(driveLetter);
+    }
+
+    public char DriveLetter { get; }
+    public string Root => $"{DriveLetter}:\\";
 }
 
 public sealed class TemporaryDriveLetterResult

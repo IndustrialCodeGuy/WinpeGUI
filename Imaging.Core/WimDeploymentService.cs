@@ -87,6 +87,7 @@ public sealed class WimDeploymentService
         string imagePath,
         WimImageInfo image,
         WimDeploymentFirmwareType firmwareType,
+        char windowsDriveLetter,
         IProgress<WimDeploymentProgress>? progress,
         CancellationToken cancellationToken)
     {
@@ -98,6 +99,13 @@ public sealed class WimDeploymentService
             throw new FileNotFoundException("The WIM file was not found.", imagePath);
         if (firmwareType is not (WimDeploymentFirmwareType.Bios or WimDeploymentFirmwareType.Uefi))
             throw new InvalidOperationException("The current firmware mode could not be determined as BIOS or UEFI.");
+
+        windowsDriveLetter = char.ToUpperInvariant(windowsDriveLetter);
+        if (windowsDriveLetter is < 'C' or > 'Z' || windowsDriveLetter is 'R' or 'S' or 'X')
+            throw new ArgumentOutOfRangeException(nameof(windowsDriveLetter), "The deployment Windows drive letter must be C:-Z: and cannot be R:, S:, or X:.");
+
+        string windowsRoot = $"{windowsDriveLetter}:\\";
+        string windowsDirectory = Path.Combine(windowsRoot, "Windows");
 
         List<string> transcript = new();
         List<string> warnings = new();
@@ -121,7 +129,7 @@ public sealed class WimDeploymentService
             : "Preparing disk for BIOS/MBR deployment...");
 
         ProcessResult partitionResult = await RunDiskPartAsync(
-            BuildCreatePartitionsScript(disk.DiskNumber, firmwareType),
+            BuildCreatePartitionsScript(disk.DiskNumber, firmwareType, windowsDriveLetter),
             cancellationToken).ConfigureAwait(false);
         AppendTranscript(transcript, "Create partitions", partitionResult);
         if (!partitionResult.Success)
@@ -133,13 +141,13 @@ public sealed class WimDeploymentService
                 "DiskPart could not create the deployment partition layout.");
         }
 
-        if (!Directory.Exists(@"C:\") || !Directory.Exists(@"S:\") || !Directory.Exists(@"R:\"))
+        if (!Directory.Exists(windowsRoot) || !Directory.Exists(@"S:\") || !Directory.Exists(@"R:\"))
         {
             return Failed(
                 firmwareType,
                 transcript,
                 warnings,
-                "The deployment partitions were created, but the expected C:, S:, and R: access paths are not all available.");
+                $"The deployment partitions were created, but the expected {windowsDriveLetter}:, S:, and R: access paths are not all available.");
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -148,7 +156,7 @@ public sealed class WimDeploymentService
             progress?.Report(new WimDeploymentProgress(update.Percentage, update.Message)));
 
         WimOperationResult applyResult = await _wimBackend.ApplyAsync(
-            @"C:\",
+            windowsRoot,
             imagePath,
             image.Index,
             dismProgress,
@@ -178,18 +186,18 @@ public sealed class WimDeploymentService
                 $"DISM failed while applying WIM image index {image.Index}.");
         }
 
-        if (!Directory.Exists(@"C:\Windows"))
+        if (!Directory.Exists(windowsDirectory))
         {
             return Failed(
                 firmwareType,
                 transcript,
                 warnings,
-                "The selected WIM image applied successfully, but it does not contain a Windows directory at C:\\Windows. Deploy WIM requires a Windows installation image so boot files can be configured.");
+                $"The selected WIM image applied successfully, but it does not contain a Windows directory at {windowsDirectory}. Deploy WIM requires a Windows installation image so boot files can be configured.");
         }
 
         cancellationToken.ThrowIfCancellationRequested();
         report("Configuring boot files...");
-        ProcessResult bcdBoot = await RunBcdBootAsync(cancellationToken).ConfigureAwait(false);
+        ProcessResult bcdBoot = await RunBcdBootAsync(windowsDirectory, cancellationToken).ConfigureAwait(false);
         AppendTranscript(transcript, "BCDBoot", bcdBoot);
         if (!bcdBoot.Success)
         {
@@ -202,7 +210,7 @@ public sealed class WimDeploymentService
 
         cancellationToken.ThrowIfCancellationRequested();
         report("Configuring Windows Recovery Environment...");
-        await ConfigureRecoveryAsync(transcript, warnings, cancellationToken).ConfigureAwait(false);
+        await ConfigureRecoveryAsync(windowsDirectory, transcript, warnings, cancellationToken).ConfigureAwait(false);
 
         cancellationToken.ThrowIfCancellationRequested();
         report("Hiding the Recovery partition...");
@@ -217,7 +225,7 @@ public sealed class WimDeploymentService
 
         cancellationToken.ThrowIfCancellationRequested();
         report("Verifying Windows RE configuration...");
-        ProcessResult verifyRe = await RunReagentcInfoAsync(cancellationToken).ConfigureAwait(false);
+        ProcessResult verifyRe = await RunReagentcInfoAsync(windowsDirectory, cancellationToken).ConfigureAwait(false);
         AppendTranscript(transcript, "REAgentC info", verifyRe);
         if (!verifyRe.Success)
             warnings.Add("Windows RE configuration could not be verified after deployment.");
@@ -234,13 +242,14 @@ public sealed class WimDeploymentService
     }
 
     private static async Task ConfigureRecoveryAsync(
+        string windowsDirectory,
         List<string> transcript,
         List<string> warnings,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        string sourceWinRe = @"C:\Windows\System32\Recovery\winre.wim";
+        string sourceWinRe = Path.Combine(windowsDirectory, "System32", "Recovery", "winre.wim");
         string recoveryDirectory = @"R:\Recovery\WindowsRE";
         string targetWinRe = Path.Combine(recoveryDirectory, "winre.wim");
 
@@ -277,14 +286,14 @@ public sealed class WimDeploymentService
         try
         {
             ProcessResult setRe = await RunProcessAsync(
-                ResolveAppliedOrSystemTool("reagentc.exe"),
+                ResolveAppliedOrSystemTool(windowsDirectory, "reagentc.exe"),
                 new[]
                 {
                     "/Setreimage",
                     "/Path",
                     recoveryDirectory,
                     "/Target",
-                    @"C:\Windows"
+                    windowsDirectory
                 },
                 cancellationToken).ConfigureAwait(false);
             AppendTranscript(transcript, "REAgentC setreimage", setRe);
@@ -302,7 +311,10 @@ public sealed class WimDeploymentService
         }
     }
 
-    private static string BuildCreatePartitionsScript(int diskNumber, WimDeploymentFirmwareType firmwareType)
+    private static string BuildCreatePartitionsScript(
+        int diskNumber,
+        WimDeploymentFirmwareType firmwareType,
+        char windowsDriveLetter)
     {
         if (firmwareType == WimDeploymentFirmwareType.Uefi)
         {
@@ -317,7 +329,7 @@ public sealed class WimDeploymentService
                 "create partition primary\r\n" +
                 "shrink minimum=900\r\n" +
                 "format quick fs=ntfs label=\"Windows\"\r\n" +
-                "assign letter=C\r\n" +
+                $"assign letter={windowsDriveLetter}\r\n" +
                 "create partition primary\r\n" +
                 "format quick fs=ntfs label=\"Recovery\"\r\n" +
                 "assign letter=R\r\n" +
@@ -336,7 +348,7 @@ public sealed class WimDeploymentService
             "create partition primary\r\n" +
             "shrink minimum=750\r\n" +
             "format quick fs=ntfs label=\"Windows\"\r\n" +
-            "assign letter=C\r\n" +
+            $"assign letter={windowsDriveLetter}\r\n" +
             "create partition primary\r\n" +
             "format quick fs=ntfs label=\"Recovery image\"\r\n" +
             "assign letter=R\r\n" +
@@ -374,23 +386,27 @@ public sealed class WimDeploymentService
         return await RunProcessAsync(powerCfg, new[] { "/s", HighPerformanceScheme }, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<ProcessResult> RunBcdBootAsync(CancellationToken cancellationToken)
+    private static async Task<ProcessResult> RunBcdBootAsync(
+        string windowsDirectory,
+        CancellationToken cancellationToken)
     {
-        string bcdBoot = ResolveAppliedOrSystemTool("bcdboot.exe");
+        string bcdBoot = ResolveAppliedOrSystemTool(windowsDirectory, "bcdboot.exe");
         return await RunProcessAsync(
             bcdBoot,
-            new[] { @"C:\Windows", "/s", "S:", "/f", "ALL" },
+            new[] { windowsDirectory, "/s", "S:", "/f", "ALL" },
             cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<ProcessResult> RunReagentcInfoAsync(CancellationToken cancellationToken)
+    private static async Task<ProcessResult> RunReagentcInfoAsync(
+        string windowsDirectory,
+        CancellationToken cancellationToken)
     {
         try
         {
-            string reagentc = ResolveAppliedOrSystemTool("reagentc.exe");
+            string reagentc = ResolveAppliedOrSystemTool(windowsDirectory, "reagentc.exe");
             return await RunProcessAsync(
                 reagentc,
-                new[] { "/Info", "/Target", @"C:\Windows" },
+                new[] { "/Info", "/Target", windowsDirectory },
                 cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -402,9 +418,6 @@ public sealed class WimDeploymentService
             return ProcessResult.Failed(ex.Message);
         }
     }
-
-    private static string ResolveAppliedOrSystemTool(string fileName) =>
-        ResolveAppliedOrSystemTool(@"C:\Windows", fileName);
 
     private static string ResolveAppliedOrSystemTool(string windowsDirectory, string fileName)
     {

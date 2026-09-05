@@ -93,7 +93,7 @@ public static class ImagingPreflight
             .Where(static root => root.Length > 0)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        foreach (string requiredRoot in new[] { @"C:\", @"S:\", @"R:\" })
+        foreach (string requiredRoot in new[] { @"S:\", @"R:\" })
         {
             if (!mountedRoots.Contains(requiredRoot))
                 continue;
@@ -103,7 +103,7 @@ public static class ImagingPreflight
                 continue;
 
             string ownerText = owner == null ? "another mounted volume" : $"Disk {owner.DiskNumber}";
-            return $"Deploy WIM uses {requiredRoot.TrimEnd('\\')} as a temporary deployment drive letter, but that letter is currently in use by {ownerText}. " +
+            return $"Deploy WIM uses {requiredRoot.TrimEnd('\\')} as a deployment access letter, but that letter is currently in use by {ownerText}. " +
                    "Remove or reassign that drive letter before deployment.";
         }
 
