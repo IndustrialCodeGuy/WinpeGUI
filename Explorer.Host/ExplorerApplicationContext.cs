@@ -5,7 +5,6 @@ using Explorer.Host.Pickers;
 using Explorer.Host.Startup;
 using Shared.Shell.Models;
 using Shared.Shell.Theming;
-using Shared.Shell.Utilities;
 using Shell.Core.FileTypes;
 using Shell.Core.Host;
 using Shell.Core.Interfaces;
@@ -267,7 +266,7 @@ internal sealed class ExplorerApplicationContext : ApplicationContext, IExplorer
             string normalizedRoot = DriveStateManager.NormalizeDriveRoot(driveRoot);
 
             return TryResolveDriveDevice(normalizedRoot, out string pnpDeviceId) &&
-                StorageDeviceTopology.IsUsbAttachedStorageDevice(pnpDeviceId);
+                IsDriveDeviceEjectCandidate(pnpDeviceId);
         }
         catch
         {
@@ -963,7 +962,7 @@ internal sealed class ExplorerApplicationContext : ApplicationContext, IExplorer
     {
         string targetRoot = DriveStateManager.NormalizeDriveRoot(pathOrRoot);
         if (!TryResolveDriveDevice(targetRoot, out string pnpDeviceId) ||
-            !StorageDeviceTopology.IsUsbAttachedStorageDevice(pnpDeviceId))
+            !IsDriveDeviceEjectCandidate(pnpDeviceId))
         {
             return false;
         }
@@ -1070,6 +1069,67 @@ internal sealed class ExplorerApplicationContext : ApplicationContext, IExplorer
         {
             return null;
         }
+    }
+
+    private static bool IsDriveDeviceEjectCandidate(string pnpDeviceId)
+    {
+        try
+        {
+            if (CM_Locate_DevNodeW(out uint devInst, pnpDeviceId, CM_LOCATE_DEVNODE_NORMAL) != CR_SUCCESS)
+                return false;
+
+            return IsDriveDeviceEjectCandidate(devInst);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsDriveDeviceEjectCandidate(uint devInst)
+    {
+        uint currentDevInst = devInst;
+        HashSet<uint> visitedDevInsts = [];
+
+        while (visitedDevInsts.Add(currentDevInst))
+        {
+            if (HasEjectableStorageInstanceId(currentDevInst))
+                return true;
+
+            if (CM_Get_Parent(out uint parentDevInst, currentDevInst, 0) != CR_SUCCESS ||
+                parentDevInst == currentDevInst)
+            {
+                return false;
+            }
+
+            if (!TryGetDeviceInstanceId(parentDevInst, out string parentDeviceId) ||
+                IsHardEjectParentBoundary(parentDeviceId))
+            {
+                return false;
+            }
+
+            currentDevInst = parentDevInst;
+        }
+
+        return false;
+    }
+
+    private static bool HasEjectableStorageInstanceId(uint devInst)
+    {
+        return TryGetDeviceInstanceId(devInst, out string instanceId) &&
+            IsEjectableStorageInstanceId(instanceId);
+    }
+
+    private static bool IsEjectableStorageInstanceId(string instanceId)
+    {
+        if (instanceId.StartsWith(@"USBSTOR\", StringComparison.OrdinalIgnoreCase) ||
+            instanceId.StartsWith(@"UASPSTOR\", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return instanceId.StartsWith(@"USB\", StringComparison.OrdinalIgnoreCase) &&
+            !instanceId.StartsWith(@"USB\ROOT", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryRequestDeviceEject(string pnpDeviceId)
