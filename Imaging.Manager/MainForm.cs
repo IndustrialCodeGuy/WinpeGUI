@@ -55,6 +55,7 @@ public partial class MainForm : Form
     private readonly Dictionary<int, Image> _diskImagesBySize = new();
     private readonly Dictionary<(DriveVisualKind Kind, int Size), Image> _partitionImagesByKind = new();
     private bool _initialInventoryLoading = true;
+    private bool _showWhenInitialInventoryReady;
     private bool _diskRefreshPending;
     private bool _diskRefreshInProgress;
     private Task? _diskRefreshTask;
@@ -116,6 +117,18 @@ public partial class MainForm : Form
         _ = InitializeInventoryAsync();
     }
 
+    protected override void SetVisibleCore(bool value)
+    {
+        if (value && _initialInventoryLoading)
+        {
+            _showWhenInitialInventoryReady = true;
+            base.SetVisibleCore(false);
+            return;
+        }
+
+        base.SetVisibleCore(value);
+    }
+
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
@@ -174,6 +187,16 @@ public partial class MainForm : Form
             {
                 _storageChangeCoordinator?.Start();
                 UpdateSelectedDiskPanel();
+                PerformLayout();
+                ApplyLayoutMetrics();
+                CenterInitialWindow();
+                TrackNormalClientSize();
+
+                if (_showWhenInitialInventoryReady && !Visible)
+                {
+                    _showWhenInitialInventoryReady = false;
+                    Show();
+                }
             }
         }
     }
