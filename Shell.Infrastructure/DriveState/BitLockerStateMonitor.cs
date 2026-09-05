@@ -5,6 +5,8 @@ namespace Shell.Infrastructure.DriveState;
 public sealed class BitLockerStateMonitor : IDisposable
 {
     private const int BitLockerDebounceMilliseconds = 250;
+    private const int StartRetryMilliseconds = 1000;
+    private const int MaxStartAttempts = 3;
     private const string BitLockerNamespace = @"\\.\Root\CIMV2\Security\MicrosoftVolumeEncryption";
     private const string BitLockerVolumeChangeQuery =
         "SELECT * FROM __InstanceModificationEvent WITHIN 1 WHERE TargetInstance ISA 'Win32_EncryptableVolume'";
@@ -17,6 +19,7 @@ public sealed class BitLockerStateMonitor : IDisposable
     private System.Threading.Timer? _debounceTimer;
     private bool _pendingRefreshAll;
     private bool _startQueued;
+    private int _startAttemptCount;
     private bool _disposed;
 
     public event EventHandler<string?>? BitLockerStateChanged;
@@ -34,6 +37,7 @@ public sealed class BitLockerStateMonitor : IDisposable
                 return;
 
             _startQueued = true;
+            _startAttemptCount++;
         }
 
         _ = Task.Run(StartCore);
@@ -63,11 +67,14 @@ public sealed class BitLockerStateMonitor : IDisposable
             {
                 if (_disposed || _watcher is not null)
                 {
+                    _startQueued = false;
                     StopAndDisposeWatcher(watcher);
                     return;
                 }
 
                 _watcher = watcher;
+                _startQueued = false;
+                _startAttemptCount = 0;
                 watcher = null;
             }
         }
@@ -75,6 +82,29 @@ public sealed class BitLockerStateMonitor : IDisposable
         {
             if (watcher is not null)
                 StopAndDisposeWatcher(watcher);
+
+            bool retry;
+            lock (_sync)
+            {
+                _startQueued = false;
+                retry = !_disposed && _watcher is null && _startAttemptCount < MaxStartAttempts;
+            }
+
+            if (retry)
+                _ = RetryStartAsync();
+        }
+    }
+
+    private async Task RetryStartAsync()
+    {
+        try
+        {
+            await Task.Delay(StartRetryMilliseconds).ConfigureAwait(false);
+            Start();
+        }
+        catch
+        {
+            // Best-effort monitor startup; callers retain manual refresh paths.
         }
     }
 
