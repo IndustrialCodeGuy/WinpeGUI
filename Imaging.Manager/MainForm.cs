@@ -1,7 +1,8 @@
-using Imaging.Core;
+﻿using Imaging.Core;
 using Shared.Shell.Models;
 using Shared.Shell.Theming;
 using Shared.Shell.Utilities;
+using Shell.Infrastructure.Coordination;
 
 namespace Imaging.Manager;
 
@@ -11,11 +12,16 @@ public partial class MainForm : Form
     private readonly DismFfuBackend _ffuBackend = new();
     private readonly DismWimBackend _wimBackend = new();
     private readonly TemporaryDriveLetterService _temporaryDriveLetters = new();
+    private readonly DriveLetterReassignmentService _driveLetterReassignment;
     private readonly WimDeploymentService _wimDeployment;
     private readonly WinReStagingService _winReStaging;
     private readonly PartitionFormatService _partitionFormatter = new();
+    private readonly ImagingOperationCoordinator _operationCoordinator = new();
+    private StorageChangeCoordinator? _storageChangeCoordinator;
+    private CancellationTokenSource? _activationCts;
+    private Task? _activationTask;
 
-    private FlowLayoutPanel _pnlDisks = null!;
+    private VerticalOnlyFlowLayoutPanel _pnlDisks = null!;
     private Panel _rightPanel = null!;
     private Panel _pnlGlobalActions = null!;
     private Panel _pnlContextActions = null!;
@@ -44,8 +50,14 @@ public partial class MainForm : Form
     private IReadOnlyList<ImagingDiskInfo> _disks = Array.Empty<ImagingDiskInfo>();
     private readonly Dictionary<int, Image> _diskImagesBySize = new();
     private readonly Dictionary<(DriveVisualKind Kind, int Size), Image> _partitionImagesByKind = new();
-    private bool _isLoading;
-    private bool _operationActive;
+    private bool _initialInventoryLoading = true;
+    private bool _diskRefreshPending;
+    private bool _diskRefreshInProgress;
+    private Task? _diskRefreshTask;
+    private int? _pendingRefreshDiskNumber;
+    private int? _pendingRefreshPartitionNumber;
+    private string? _pendingRefreshMountedWimDirectory;
+    private bool _operationActive => _operationCoordinator.IsOperationActive;
     private IReadOnlyList<WimMountedImageInfo> _mountedWims = Array.Empty<WimMountedImageInfo>();
     private readonly Dictionary<string, PendingWimUnmountState> _pendingWimUnmounts = new(StringComparer.OrdinalIgnoreCase);
     private string _loadError = string.Empty;
@@ -60,6 +72,7 @@ public partial class MainForm : Form
 
     public MainForm()
     {
+        _driveLetterReassignment = new DriveLetterReassignmentService(_temporaryDriveLetters);
         _wimDeployment = new WimDeploymentService(_wimBackend);
         _winReStaging = new WinReStagingService(_temporaryDriveLetters);
 
@@ -79,9 +92,21 @@ public partial class MainForm : Form
 
         InitializeDiskUi();
         ApplyMinimumSize();
+        PerformLayout();
+        ApplyLayoutMetrics();
+        UpdateSelectedDiskPanel();
+        CenterInitialWindow();
+        TrackNormalClientSize();
         LoadPendingWimUnmountState();
-        LoadDisks();
-        _ = RefreshMountedWimStateAsync();
+
+        SynchronizationContext uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
+        if (SynchronizationContext.Current is null)
+            SynchronizationContext.SetSynchronizationContext(uiContext);
+
+        _storageChangeCoordinator = new StorageChangeCoordinator(uiContext, monitorBitLocker: true);
+        _storageChangeCoordinator.StorageChanged += StorageChangeCoordinator_StorageChanged;
+
+        _ = InitializeInventoryAsync();
     }
 
     protected override void OnShown(EventArgs e)
@@ -107,6 +132,15 @@ public partial class MainForm : Form
     {
         if (disposing)
         {
+            StopActivationListener();
+
+            if (_storageChangeCoordinator is not null)
+            {
+                _storageChangeCoordinator.StorageChanged -= StorageChangeCoordinator_StorageChanged;
+                _storageChangeCoordinator.Dispose();
+                _storageChangeCoordinator = null;
+            }
+
             foreach (Image image in _diskImagesBySize.Values.Concat(_partitionImagesByKind.Values).Distinct())
                 image.Dispose();
 
@@ -118,4 +152,53 @@ public partial class MainForm : Form
 
         base.Dispose(disposing);
     }
+
+    private async Task InitializeInventoryAsync()
+    {
+        try
+        {
+            await RequestDiskRefreshAsync();
+            await RefreshMountedWimStateAsync();
+        }
+        finally
+        {
+            _initialInventoryLoading = false;
+            if (!IsDisposed && !Disposing)
+            {
+                _storageChangeCoordinator?.Start();
+                UpdateSelectedDiskPanel();
+            }
+        }
+    }
+
+    private void StorageChangeCoordinator_StorageChanged(object? sender, StorageChangeEventArgs e)
+    {
+        _ = RequestDiskRefreshAsync();
+    }
+
+    private bool TryBeginOperation(string operationName, ImagingDiskInfo? disk = null)
+    {
+        bool started = _operationCoordinator.TryBegin(operationName, disk);
+        if (started)
+            RefreshDiskOperationIndicators();
+        return started;
+    }
+
+    private void EndOperation()
+    {
+        _operationCoordinator.End();
+        RefreshDiskOperationIndicators();
+    }
+
+    private void SetWaitCursorState(bool waiting)
+    {
+        if (IsDisposed || Disposing)
+            return;
+
+        Cursor target = waiting ? Cursors.WaitCursor : Cursors.Default;
+        UseWaitCursor = waiting;
+        Cursor = target;
+        Cursor.Current = target;
+    }
+
 }

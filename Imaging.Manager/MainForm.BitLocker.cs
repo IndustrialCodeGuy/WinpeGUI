@@ -54,7 +54,8 @@ public partial class MainForm
 
         int diskNumber = disk.DiskNumber;
         int partitionNumber = partition.PartitionNumber;
-        _operationActive = true;
+        if (!TryBeginOperation("Unlock", disk))
+            return;
         Enabled = false;
         UpdateSelectedDiskPanel();
         _lblStatus.Text = "Unlock window opened.";
@@ -98,8 +99,8 @@ public partial class MainForm
         finally
         {
             Enabled = true;
-            _operationActive = false;
-            LoadDisks(diskNumber);
+            EndOperation();
+            await RequestDiskRefreshAsync(diskNumber);
             SelectPartitionByNumber(partitionNumber);
         }
     }

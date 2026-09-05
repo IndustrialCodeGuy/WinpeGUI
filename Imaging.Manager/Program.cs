@@ -1,12 +1,10 @@
-using BitLocker.Core;
+﻿using BitLocker.Core;
 using Shared.Shell.Theming;
 
 namespace Imaging.Manager;
 
 internal static class Program
 {
-    private const string InstanceMutexName = @"Local\WinPEGUI.ImagingManager";
-
     [STAThread]
     private static int Main(string[] args)
     {
@@ -25,26 +23,17 @@ internal static class Program
             return 1;
         }
 
-        using Mutex instanceMutex = new(true, InstanceMutexName, out bool isFirstInstance);
-        if (!isFirstInstance)
+        using Mutex? instanceMutex = ImagingManagerActivation.TryAcquireManagerMutex();
+        if (instanceMutex == null)
         {
-            MessageBox.Show(
-                "Imaging Manager is already running. Use the existing window to avoid overlapping disk or image operations.",
-                "Imaging Manager",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+            ImagingManagerActivation.SignalExistingManager();
             return 0;
         }
 
-        try
-        {
-            using MainForm form = new();
-            Application.Run(form);
-            return 0;
-        }
-        finally
-        {
-            instanceMutex.ReleaseMutex();
-        }
+        using EventWaitHandle activateEvent = ImagingManagerActivation.CreateManagerActivateEvent();
+        using MainForm form = new();
+        form.StartActivationListener(activateEvent);
+        Application.Run(form);
+        return 0;
     }
 }

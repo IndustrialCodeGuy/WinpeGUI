@@ -5,6 +5,7 @@ namespace Imaging.Manager;
 internal sealed class DeployWimConfirmDialog : ImagingConfirmationDialogBase
 {
     private readonly WimImageSelector _imageSelector;
+    private readonly CheckBox _assignTargetToC;
     private readonly CheckBox _confirm;
     private readonly Button _deploy;
 
@@ -43,6 +44,9 @@ internal sealed class DeployWimConfirmDialog : ImagingConfirmationDialogBase
             gapAfter: 8,
             emphasis: true);
 
+        _assignTargetToC = AddCheckBox(
+            "Assign the deployed Windows partition to C: in WinPE (reassign current C: if needed).",
+            true);
         _confirm = AddCheckBox(
             $"I understand all data on Disk {disk.DiskNumber} will be erased.",
             gapAfter: 0);
@@ -57,6 +61,8 @@ internal sealed class DeployWimConfirmDialog : ImagingConfirmationDialogBase
     }
 
     public WimImageInfo SelectedImage => _imageSelector.SelectedImage;
+
+    public bool AssignTargetToC => _assignTargetToC.Checked;
 
     private void UpdateDeployButton() =>
         _deploy.Enabled = _confirm.Checked;

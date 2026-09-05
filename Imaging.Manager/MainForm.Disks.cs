@@ -1,5 +1,6 @@
-using BitLocker.Core;
+﻿using BitLocker.Core;
 using Imaging.Core;
+using Shared.Shell.Interop;
 using Shared.Shell.Models;
 using Shared.Shell.Theming;
 using Shared.Shell.Utilities;
@@ -25,6 +26,32 @@ public partial class MainForm
     private sealed class VerticalOnlyFlowLayoutPanel : FlowLayoutPanel
     {
         private const int SbHorz = 0;
+        private const int WmSetRedraw = 0x000B;
+
+        public VerticalOnlyFlowLayoutPanel()
+        {
+            DoubleBuffered = true;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+            UpdateStyles();
+        }
+
+        public void SetRedrawEnabled(bool enabled)
+        {
+            if (!IsHandleCreated)
+                return;
+
+            User32.SendMessage(
+                Handle,
+                WmSetRedraw,
+                enabled ? new IntPtr(1) : IntPtr.Zero,
+                IntPtr.Zero);
+
+            if (enabled)
+            {
+                Invalidate(invalidateChildren: true);
+                Update();
+            }
+        }
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
@@ -262,38 +289,80 @@ public partial class MainForm
         }
     }
 
-    private void LoadDisks(int? selectDiskNumber = null)
+    private Task RequestDiskRefreshAsync(
+        int? selectDiskNumber = null,
+        int? preferredPartitionNumber = null,
+        string? preferredMountDirectory = null)
     {
-        if (_isLoading || _operationActive)
-            return;
+        if (IsDisposed || Disposing)
+            return Task.CompletedTask;
 
-        int? selectedPartitionNumber = GetSelectedPartition()?.PartitionNumber;
+        _pendingRefreshDiskNumber = selectDiskNumber ?? GetSelectedDisk()?.DiskNumber;
+        _pendingRefreshPartitionNumber = preferredPartitionNumber ?? GetSelectedPartition()?.PartitionNumber;
+        _pendingRefreshMountedWimDirectory = preferredMountDirectory ?? GetSelectedMountedWim()?.MountDirectory;
+        _diskRefreshPending = true;
 
-        _isLoading = true;
-        UseWaitCursor = true;
-        _loadError = string.Empty;
+        if (_diskRefreshTask is null || _diskRefreshTask.IsCompleted)
+            _diskRefreshTask = RunDiskRefreshLoopAsync();
+
+        return _diskRefreshTask;
+    }
+
+    private async Task RunDiskRefreshLoopAsync()
+    {
+        _diskRefreshInProgress = true;
+        UpdateSelectedDiskPanel();
+
         try
         {
-            _disks = _inventory.GetDisks();
-        }
-        catch (Exception ex)
-        {
-            _disks = Array.Empty<ImagingDiskInfo>();
-            _loadError = ex.Message;
+            while (_diskRefreshPending && !IsDisposed && !Disposing)
+            {
+                _diskRefreshPending = false;
+
+                int? selectDiskNumber = _pendingRefreshDiskNumber;
+                int? preferredPartitionNumber = _pendingRefreshPartitionNumber;
+                string? preferredMountDirectory = _pendingRefreshMountedWimDirectory;
+
+                IReadOnlyList<ImagingDiskInfo> refreshedDisks;
+                string loadError = string.Empty;
+                try
+                {
+                    refreshedDisks = await Task.Run(_inventory.GetDisks);
+                }
+                catch (Exception ex)
+                {
+                    refreshedDisks = Array.Empty<ImagingDiskInfo>();
+                    loadError = ex.Message;
+                }
+
+                if (IsDisposed || Disposing)
+                    return;
+
+                _disks = refreshedDisks;
+                _loadError = loadError;
+
+                RebuildDiskTiles(
+                    selectDiskNumber,
+                    preferredPartitionNumber,
+                    preferredMountDirectory);
+                ApplyLayoutMetrics();
+                UpdateSelectedDiskPanel();
+            }
         }
         finally
         {
-            _isLoading = false;
-            UseWaitCursor = false;
+            _diskRefreshInProgress = false;
+            if (!IsDisposed && !Disposing)
+                UpdateSelectedDiskPanel();
         }
-
-        RebuildDiskTiles(selectDiskNumber, selectedPartitionNumber);
-        ApplyLayoutMetrics();
-        UpdateSelectedDiskPanel();
     }
 
-    private void RebuildDiskTiles(int? selectDiskNumber, int? preferredPartitionNumber)
+    private void RebuildDiskTiles(
+        int? selectDiskNumber,
+        int? preferredPartitionNumber,
+        string? preferredMountDirectory = null)
     {
+        _pnlDisks.SetRedrawEnabled(false);
         _pnlDisks.SuspendLayout();
         try
         {
@@ -331,9 +400,13 @@ public partial class MainForm
 
             _mountedWimRow = CreateMountedWimRow();
             _pnlDisks.Controls.Add(_mountedWimRow);
-            RebuildMountedWimTiles();
+            RebuildMountedWimTiles(preferredMountDirectory);
 
-            if (preferredPartitionTile != null)
+            if (_selectedMountedWimTile != null)
+            {
+                // RebuildMountedWimTiles restored the mounted-image selection.
+            }
+            else if (preferredPartitionTile != null)
                 SelectPartitionTile(preferredPartitionTile);
             else if (preferredDiskTile != null)
                 SelectDiskTile(preferredDiskTile);
@@ -344,7 +417,14 @@ public partial class MainForm
         }
         finally
         {
-            _pnlDisks.ResumeLayout(true);
+            try
+            {
+                _pnlDisks.ResumeLayout(true);
+            }
+            finally
+            {
+                _pnlDisks.SetRedrawEnabled(true);
+            }
         }
     }
 
@@ -432,12 +512,8 @@ public partial class MainForm
 
         Label status = new()
         {
-            Text = disk.IsOffline switch
-            {
-                true => "Offline",
-                false => "Online",
-                _ => "Status unknown"
-            },
+            Name = "DiskStatusLabel",
+            Text = GetDiskStatusText(disk),
             ForeColor = ShellTheme.TextColor,
             TextAlign = ContentAlignment.MiddleLeft,
             AutoEllipsis = true,
@@ -672,7 +748,7 @@ public partial class MainForm
     {
         Panel tile = new()
         {
-            Width = _mPx.MountedWimTileWidth,
+            Width = 1,
             Height = _mPx.DiskRowHeight,
             Margin = new Padding(0),
             Padding = new Padding(0),
@@ -684,7 +760,7 @@ public partial class MainForm
         };
 
         string file = string.IsNullOrWhiteSpace(image.ImageFile) ? "Mounted WIM" : Path.GetFileName(image.ImageFile);
-        string index = image.ImageIndex > 0 ? $" [{image.ImageIndex}]" : string.Empty;
+        string index = image.ImageIndex > 0 ? $" — Index {image.ImageIndex}" : string.Empty;
         Label name = new()
         {
             Text = file + index,
@@ -879,10 +955,19 @@ public partial class MainForm
         if (_pnlMountedWims == null || _pnlMountedWims.IsDisposed)
             return;
 
+        Panel[] tiles = _pnlMountedWims.Controls.OfType<Panel>().ToArray();
+        if (tiles.Length == 0)
+            return;
+
         int tileHeight = Math.Max(1, _pnlMountedWims.ClientSize.Height);
-        foreach (Panel tile in _pnlMountedWims.Controls.OfType<Panel>())
+        int available = Math.Max(1, _pnlMountedWims.ClientSize.Width);
+        int baseWidth = Math.Max(1, available / tiles.Length);
+        int remainder = Math.Max(0, available - (baseWidth * tiles.Length));
+
+        for (int i = 0; i < tiles.Length; i++)
         {
-            tile.Width = _mPx.MountedWimTileWidth;
+            Panel tile = tiles[i];
+            tile.Width = baseWidth + (i < remainder ? 1 : 0);
             tile.Height = tileHeight;
             LayoutMountedWimTile(tile);
         }
@@ -1227,6 +1312,38 @@ public partial class MainForm
         return string.Empty;
     }
 
+    private string GetDiskStatusText(ImagingDiskInfo disk)
+    {
+        if (_operationCoordinator.TryGetDiskOperationName(disk, out string operationName))
+            return operationName + "...";
+
+        return disk.IsOffline switch
+        {
+            true => "Offline",
+            false => "Online",
+            _ => "Status unknown"
+        };
+    }
+
+    private void RefreshDiskOperationIndicators()
+    {
+        if (_pnlDisks == null || _pnlDisks.IsDisposed)
+            return;
+
+        foreach (Panel row in _pnlDisks.Controls.OfType<Panel>())
+        {
+            if (row.Tag is not DiskRowContext context)
+                continue;
+
+            Label? status = context.DiskTile.Controls["DiskStatusLabel"] as Label;
+            if (status != null)
+                status.Text = GetDiskStatusText(context.Disk);
+        }
+
+        if (!IsDisposed && !Disposing)
+            UpdateSelectedDiskPanel();
+    }
+
     private void UpdateSelectedDiskPanel()
     {
         ImagingDiskInfo? disk = GetSelectedDisk();
@@ -1250,17 +1367,21 @@ public partial class MainForm
                                          TryGetOfflineWindowsRoot(partition!, out _);
         bool partitionIsLocked = partitionSelectionActive &&
                                  GetBitLockerVolumeForPartition(partition!)?.IsLocked == true;
+        string selectedDiskOperationName = string.Empty;
+        bool selectedDiskBusy = disk != null &&
+                                _operationCoordinator.TryGetDiskOperationName(disk, out selectedDiskOperationName);
 
         _lblStatus.ForeColor = GetInformationTextColor();
+        bool actionsAvailable = !_initialInventoryLoading && !_operationActive && !_diskRefreshInProgress;
 
         _btnMountWim.Visible = true;
         _btnExportWim.Visible = true;
         _btnCleanupMounts.Visible = true;
         _btnRefresh.Visible = true;
-        _btnMountWim.Enabled = !_operationActive;
-        _btnExportWim.Enabled = !_operationActive;
-        _btnCleanupMounts.Enabled = !_operationActive && anyInvalidMountedWim;
-        _btnRefresh.Enabled = !_operationActive;
+        _btnMountWim.Enabled = actionsAvailable;
+        _btnExportWim.Enabled = actionsAvailable;
+        _btnCleanupMounts.Enabled = actionsAvailable && anyInvalidMountedWim;
+        _btnRefresh.Enabled = actionsAvailable;
 
         _btnGetInfo.Visible = diskSelectionActive || partitionSelectionActive || mountedWimSelectionActive;
         _btnCapture.Visible = diskSelectionActive;
@@ -1274,25 +1395,29 @@ public partial class MainForm
         _btnAddDrivers.Visible = mountedWimHealthyOrUnknown || partitionIsOfflineWindows;
         _btnUnlock.Visible = partitionIsLocked;
 
-        _btnGetInfo.Enabled = !_operationActive && _btnGetInfo.Visible;
-        _btnCapture.Enabled = !_operationActive && diskSelectionActive;
-        _btnApply.Enabled = !_operationActive && diskSelectionActive;
-        _btnDeployWim.Enabled = !_operationActive && diskSelectionActive;
-        _btnCaptureWim.Enabled = !_operationActive && partitionSelectionActive;
-        _btnApplyWim.Enabled = !_operationActive && partitionSelectionActive;
-        _btnUnmountWim.Enabled = !_operationActive && (mountedWimHealthyOrUnknown || mountedWimPendingUnmount);
-        _btnRemountWim.Enabled = !_operationActive && mountedWimNeedsRemount;
-        _btnAddDrivers.Enabled = !_operationActive &&
+        _btnGetInfo.Enabled = actionsAvailable && _btnGetInfo.Visible;
+        _btnCapture.Enabled = actionsAvailable && diskSelectionActive;
+        _btnApply.Enabled = actionsAvailable && diskSelectionActive;
+        _btnDeployWim.Enabled = actionsAvailable && diskSelectionActive;
+        _btnCaptureWim.Enabled = actionsAvailable && partitionSelectionActive;
+        _btnApplyWim.Enabled = actionsAvailable && partitionSelectionActive;
+        _btnUnmountWim.Enabled = actionsAvailable && (mountedWimHealthyOrUnknown || mountedWimPendingUnmount);
+        _btnRemountWim.Enabled = actionsAvailable && mountedWimNeedsRemount;
+        _btnAddDrivers.Enabled = actionsAvailable &&
                                  ((mountedWimHealthyOrUnknown && mountedWim!.ReadWrite) ||
                                   partitionIsOfflineWindows);
-        _btnUnlock.Enabled = !_operationActive && partitionIsLocked;
+        _btnUnlock.Enabled = actionsAvailable && partitionIsLocked;
+
+        string selectionBusySuffix = selectedDiskBusy
+            ? $" — {selectedDiskOperationName} in progress"
+            : string.Empty;
 
         _lblSelectionContext.Text = mountedWimSelectionActive
             ? mountedWim!.DisplayName
             : partitionSelectionActive
-                ? GetPartitionDisplayName(partition!)
+                ? GetPartitionDisplayName(partition!) + selectionBusySuffix
                 : diskSelectionActive
-                    ? $"Disk {disk!.DiskNumber}"
+                    ? $"Disk {disk!.DiskNumber}" + selectionBusySuffix
                     : "Select a disk, partition, or mounted WIM";
 
         LayoutGlobalActionStrip(_mPx.DetailButtonWidth, _mPx.DetailButtonHeight, _mPx.DetailButtonGap);
@@ -1649,7 +1774,12 @@ public partial class MainForm
     {
         bool wasVisible = _lblStatus.Visible;
 
-        if (!string.IsNullOrWhiteSpace(_loadError))
+        if (_initialInventoryLoading)
+        {
+            _lblStatus.Text = "Loading disk and mounted WIM inventory...";
+            _lblStatus.Visible = true;
+        }
+        else if (!string.IsNullOrWhiteSpace(_loadError))
         {
             _lblStatus.Text = _loadError;
             _lblStatus.Visible = true;

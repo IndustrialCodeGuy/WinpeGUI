@@ -1,4 +1,4 @@
-using Imaging.Core;
+﻿using Imaging.Core;
 
 namespace Imaging.Manager;
 
@@ -6,6 +6,7 @@ internal sealed class ApplyWimConfirmDialog : ImagingConfirmationDialogBase
 {
     private readonly WimImageSelector _imageSelector;
     private readonly CheckBox _configureBoot;
+    private readonly CheckBox _assignTargetToC;
     private readonly CheckBox _confirm;
     private readonly Button _apply;
 
@@ -50,6 +51,9 @@ internal sealed class ApplyWimConfirmDialog : ImagingConfirmationDialogBase
         _configureBoot = AddCheckBox(
             "Configure Windows boot files after apply (BCDBoot).",
             configureBootByDefault);
+        _assignTargetToC = AddCheckBox(
+            "Assign the target partition to C: before applying the image (reassign current C: if needed).",
+            true);
         _confirm = AddCheckBox(
             "I understand all files on the selected partition will be erased.",
             gapAfter: 0);
@@ -67,6 +71,8 @@ internal sealed class ApplyWimConfirmDialog : ImagingConfirmationDialogBase
     public WimImageInfo SelectedImage => _imageSelector.SelectedImage;
 
     public bool ConfigureBootFiles => _configureBoot.Checked;
+
+    public bool AssignTargetToC => _assignTargetToC.Checked;
 
     private void UpdateApplyButton() =>
         _apply.Enabled = _confirm.Checked;

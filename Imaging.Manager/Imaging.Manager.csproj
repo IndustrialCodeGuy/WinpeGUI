@@ -19,5 +19,6 @@
     <ProjectReference Include="..\Imaging.Core\Imaging.Core.csproj" />
     <ProjectReference Include="..\BitLocker.Core\BitLocker.Core.csproj" />
     <ProjectReference Include="..\Shared.Shell\Shared.Shell.csproj" />
+    <ProjectReference Include="..\Shell.Infrastructure\Shell.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

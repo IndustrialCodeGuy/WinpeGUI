@@ -81,24 +81,6 @@ public partial class MainForm
         if (metadata.ShowDialog(this) != DialogResult.OK)
             return;
 
-        if (File.Exists(imagePath))
-        {
-            try
-            {
-                File.Delete(imagePath);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(
-                    this,
-                    $"The existing FFU could not be replaced:\n\n{imagePath}\n\n{ex.Message}",
-                    "Capture FFU",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
-                return;
-            }
-        }
-
         await RunOperationAsync(
             FfuOperationKind.Capture,
             disk,
@@ -181,42 +163,45 @@ public partial class MainForm
         if (metadata.ShowDialog(this) != DialogResult.OK)
             return;
 
+        if (!TryBeginOperation("Capture WIM", disk))
+            return;
+        UpdateSelectedDiskPanel();
+
         TemporaryDriveLetterResult? temporarySourceMount = null;
-        string sourceRoot;
-
-        if (!TryGetPartitionCaptureRoot(partition, out sourceRoot))
-        {
-            UseWaitCursor = true;
-            TemporaryDriveLetterResult mountResult;
-            try
-            {
-                mountResult = _temporaryDriveLetters.Assign(disk.DiskNumber, partition.PartitionNumber);
-            }
-            finally
-            {
-                UseWaitCursor = false;
-            }
-
-            if (!mountResult.Success)
-            {
-                MessageBox.Show(
-                    this,
-                    "The selected partition does not currently have an accessible drive letter, and Imaging Manager could not temporarily mount it for WIM capture.\n\n" +
-                    mountResult.Error,
-                    "Capture WIM",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
-                return;
-            }
-
-            temporarySourceMount = mountResult;
-            sourceRoot = mountResult.Root;
-        }
-
+        string sourceRoot = string.Empty;
         bool stagedWinRe = false;
         bool operationRan = false;
         try
         {
+            if (!TryGetPartitionCaptureRoot(partition, out sourceRoot))
+            {
+                SetWaitCursorState(true);
+                TemporaryDriveLetterResult mountResult;
+                try
+                {
+                    mountResult = _temporaryDriveLetters.Assign(disk.DiskNumber, partition.PartitionNumber);
+                }
+                finally
+                {
+                    SetWaitCursorState(false);
+                }
+
+                if (!mountResult.Success)
+                {
+                    MessageBox.Show(
+                        this,
+                        "The selected partition does not currently have an accessible drive letter, and Imaging Manager could not temporarily mount it for WIM capture.\n\n" +
+                        mountResult.Error,
+                        "Capture WIM",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                    return;
+                }
+
+                temporarySourceMount = mountResult;
+                sourceRoot = mountResult.Root;
+            }
+
             // WinRE staging is a Windows-installation convenience only. Data,
             // EFI, recovery, and other mountable partitions go straight to
             // DISM without being classified or blocked by the UI.
@@ -240,7 +225,7 @@ public partial class MainForm
 
                 if (stageChoice == DialogResult.Yes)
                 {
-                    UseWaitCursor = true;
+                    SetWaitCursorState(true);
                     WinReStageResult stageResult;
                     try
                     {
@@ -248,7 +233,7 @@ public partial class MainForm
                     }
                     finally
                     {
-                        UseWaitCursor = false;
+                        SetWaitCursorState(false);
                     }
 
                     if (!stageResult.Success)
@@ -340,8 +325,10 @@ public partial class MainForm
                 }
             }
 
+            EndOperation();
+
             if (temporarySourceMount != null || operationRan)
-                LoadDisks(disk.DiskNumber);
+                await RequestDiskRefreshAsync(disk.DiskNumber);
         }
     }
 
@@ -396,13 +383,18 @@ public partial class MainForm
         if (confirm.ShowDialog(this) != DialogResult.OK)
             return;
 
-        await RunWimDeployAsync(disk, imagePath, confirm.SelectedImage, firmwareType);
+        await RunWimDeployAsync(
+            disk,
+            imagePath,
+            confirm.SelectedImage,
+            firmwareType,
+            confirm.AssignTargetToC);
     }
 
     private async Task<WimImageInfoResult?> TryLoadWimImageInfoAsync(string imagePath, string title)
     {
         WimImageInfoResult result;
-        UseWaitCursor = true;
+        SetWaitCursorState(true);
         try
         {
             result = await _wimBackend.GetImagesAsync(imagePath, CancellationToken.None);
@@ -418,7 +410,7 @@ public partial class MainForm
         }
         finally
         {
-            UseWaitCursor = false;
+            SetWaitCursorState(false);
         }
 
         if (result.Success && result.Images.Count > 0)
@@ -440,98 +432,186 @@ public partial class MainForm
         ImagingDiskInfo disk,
         string imagePath,
         WimImageInfo image,
-        WimDeploymentFirmwareType firmwareType)
+        WimDeploymentFirmwareType firmwareType,
+        bool assignTargetToC)
     {
-        _operationActive = true;
-        UpdateSelectedDiskPanel();
-        Enabled = false;
+        if (!TryBeginOperation("Deploy WIM", disk))
+            return;
 
-        using WimDeployProgressDialog progressDialog = new(disk, imagePath, image);
-        using CancellationTokenSource cts = new();
-        progressDialog.CancelRequested += (_, _) => cts.Cancel();
-        progressDialog.Show(this);
+        TemporaryDriveLetterReservation? windowsLetterReservation = null;
+        string effectiveImagePath = imagePath;
+        char windowsDriveLetter = 'C';
 
-        Progress<WimDeploymentProgress> progress = new(update => progressDialog.UpdateProgress(update));
-        WimDeploymentResult result;
         try
         {
-            result = await _wimDeployment.DeployAsync(
-                disk,
-                imagePath,
-                image,
-                firmwareType,
-                progress,
-                cts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            result = new WimDeploymentResult
+            if (assignTargetToC)
             {
-                Success = false,
-                Canceled = true,
-                FirmwareType = firmwareType
-            };
-        }
-        catch (Exception ex)
-        {
-            result = new WimDeploymentResult
+                // If C: already belongs to the target disk, DiskPart clean will release it.
+                // Otherwise move the current C: owner only because the user explicitly
+                // requested C: for this deployment.
+                if (!disk.ContainsDrive(@"C:\"))
+                {
+                    SetWaitCursorState(true);
+                    DriveLetterReassignmentResult cResult;
+                    try
+                    {
+                        cResult = _driveLetterReassignment.MoveCToLowestAvailable(
+                            AppContext.BaseDirectory,
+                            'S',
+                            'R');
+                    }
+                    finally
+                    {
+                        SetWaitCursorState(false);
+                    }
+
+                    if (!cResult.Success)
+                    {
+                        MessageBox.Show(
+                            this,
+                            "Imaging Manager could not make C: available for the deployment.\n\n" + cResult.Error,
+                            "Deploy WIM - Drive Letter",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    if (cResult.Changed)
+                    {
+                        effectiveImagePath = DriveLetterReassignmentService.RebasePathFromDisplacedC(
+                            effectiveImagePath,
+                            cResult.DisplacedCRoot);
+                    }
+                }
+            }
+            else
             {
-                Success = false,
-                Canceled = false,
-                FirmwareType = firmwareType,
-                Output = ex.Message
-            };
+                try
+                {
+                    windowsLetterReservation = _temporaryDriveLetters.ReserveAvailable('C', 'S', 'R', 'X');
+                    windowsDriveLetter = windowsLetterReservation.DriveLetter;
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(
+                        this,
+                        "Imaging Manager could not reserve a temporary drive letter for the deployed Windows partition.\n\n" + ex.Message,
+                        "Deploy WIM - Drive Letter",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                    return;
+                }
+            }
+
+            if (!File.Exists(effectiveImagePath))
+            {
+                MessageBox.Show(
+                    this,
+                    $"The selected WIM file is no longer accessible after preparing the deployment drive letters.\n\n{effectiveImagePath}",
+                    "Deploy WIM",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                return;
+            }
+
+            UpdateSelectedDiskPanel();
+            Enabled = false;
+
+            using WimDeployProgressDialog progressDialog = new(disk, effectiveImagePath, image);
+            using CancellationTokenSource cts = new();
+            progressDialog.CancelRequested += (_, _) => cts.Cancel();
+            progressDialog.Show(this);
+
+            Progress<WimDeploymentProgress> progress = new(update => progressDialog.UpdateProgress(update));
+            WimDeploymentResult result;
+            try
+            {
+                result = await _wimDeployment.DeployAsync(
+                    disk,
+                    effectiveImagePath,
+                    image,
+                    firmwareType,
+                    windowsDriveLetter,
+                    progress,
+                    cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                result = new WimDeploymentResult
+                {
+                    Success = false,
+                    Canceled = true,
+                    FirmwareType = firmwareType
+                };
+            }
+            catch (Exception ex)
+            {
+                result = new WimDeploymentResult
+                {
+                    Success = false,
+                    Canceled = false,
+                    FirmwareType = firmwareType,
+                    Output = ex.Message
+                };
+            }
+            finally
+            {
+                progressDialog.AllowClose();
+                progressDialog.Close();
+                Enabled = true;
+                Activate();
+            }
+
+            if (result.Canceled)
+            {
+                MessageBox.Show(
+                    this,
+                    "The WIM deployment was canceled. The target disk may have already been erased or may contain a partially deployed image. Do not boot it until deployment completes successfully.",
+                    "Deploy WIM Canceled",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+            else if (!result.Success)
+            {
+                string details = string.IsNullOrWhiteSpace(result.Output)
+                    ? "The deployment did not complete successfully."
+                    : result.Output;
+
+                if (result.Warnings.Count > 0)
+                    details += "\n\nWarnings:\n" + string.Join("\n", result.Warnings.Select(static warning => "- " + warning));
+
+                MessageBox.Show(this, details, "Deploy WIM Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            else if (result.Warnings.Count > 0)
+            {
+                MessageBox.Show(
+                    this,
+                    $"The WIM was deployed to Disk {disk.DiskNumber}, but deployment completed with warnings:\n\n" +
+                    string.Join("\n", result.Warnings.Select(static warning => "- " + warning)),
+                    "Deploy WIM",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+            else
+            {
+                MessageBox.Show(
+                    this,
+                    $"The WIM was deployed successfully to Disk {disk.DiskNumber}.\n\nImage: {image.DisplayName}",
+                    "Deploy WIM",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
         }
         finally
         {
-            progressDialog.AllowClose();
-            progressDialog.Close();
-            _operationActive = false;
-            Enabled = true;
-            Activate();
-        }
+            if (windowsLetterReservation != null)
+                _temporaryDriveLetters.Release(windowsLetterReservation);
 
-        if (result.Canceled)
-        {
-            MessageBox.Show(
-                this,
-                "The WIM deployment was canceled. The target disk may have already been erased or may contain a partially deployed image. Do not boot it until deployment completes successfully.",
-                "Deploy WIM Canceled",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
-        }
-        else if (!result.Success)
-        {
-            string details = string.IsNullOrWhiteSpace(result.Output)
-                ? "The deployment did not complete successfully."
-                : result.Output;
+            EndOperation();
 
-            if (result.Warnings.Count > 0)
-                details += "\n\nWarnings:\n" + string.Join("\n", result.Warnings.Select(static warning => "- " + warning));
-
-            MessageBox.Show(this, details, "Deploy WIM Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            if (!IsDisposed && !Disposing)
+                await RequestDiskRefreshAsync(disk.DiskNumber);
         }
-        else if (result.Warnings.Count > 0)
-        {
-            MessageBox.Show(
-                this,
-                $"The WIM was deployed to Disk {disk.DiskNumber}, but deployment completed with warnings:\n\n" +
-                string.Join("\n", result.Warnings.Select(static warning => "- " + warning)),
-                "Deploy WIM",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
-        }
-        else
-        {
-            MessageBox.Show(
-                this,
-                $"The WIM was deployed successfully to Disk {disk.DiskNumber}.\n\nImage: {image.DisplayName}",
-                "Deploy WIM",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
-        }
-
-        LoadDisks(disk.DiskNumber);
     }
 
     private async Task MountWimAsync()
@@ -617,7 +697,8 @@ public partial class MainForm
 
     private async Task RunWimMountAsync(string imagePath, string mountDirectory, WimImageInfo image)
     {
-        _operationActive = true;
+        if (!TryBeginOperation("Mount WIM"))
+            return;
         UpdateSelectedDiskPanel();
         Enabled = false;
 
@@ -643,7 +724,7 @@ public partial class MainForm
         {
             progressDialog.AllowClose();
             progressDialog.Close();
-            _operationActive = false;
+            EndOperation();
             Enabled = true;
             UpdateSelectedDiskPanel();
             Activate();
@@ -675,9 +756,9 @@ public partial class MainForm
     {
         int? selectedDiskNumber = GetSelectedDisk()?.DiskNumber;
         string? selectedMountDirectory = GetSelectedMountedWim()?.MountDirectory;
-        LoadDisks(selectedDiskNumber);
-        if (!string.IsNullOrWhiteSpace(selectedMountDirectory))
-            RebuildMountedWimTiles(selectedMountDirectory);
+        await RequestDiskRefreshAsync(
+            selectedDiskNumber,
+            preferredMountDirectory: selectedMountDirectory);
         await RefreshMountedWimStateAsync(selectedMountDirectory, "Refresh Mounted WIMs");
     }
 
@@ -796,7 +877,7 @@ public partial class MainForm
         string? selectedMountDirectory = preferredMountDirectory ?? GetSelectedMountedWim()?.MountDirectory;
         WimMountedImageInfoResult result;
         if (errorTitle != null)
-            UseWaitCursor = true;
+            SetWaitCursorState(true);
         try
         {
             result = await _wimBackend.GetMountedImagesAsync(CancellationToken.None);
@@ -813,7 +894,7 @@ public partial class MainForm
         finally
         {
             if (errorTitle != null && !IsDisposed)
-                UseWaitCursor = false;
+                SetWaitCursorState(false);
         }
 
         if (!result.Success)
@@ -908,7 +989,8 @@ public partial class MainForm
 
     private async Task RunWimCommitAndUnmountAsync(WimMountedImageInfo image)
     {
-        _operationActive = true;
+        if (!TryBeginOperation("Unmount WIM"))
+            return;
         UpdateSelectedDiskPanel();
         Enabled = false;
 
@@ -972,7 +1054,7 @@ public partial class MainForm
         {
             progressDialog.AllowClose();
             progressDialog.Close();
-            _operationActive = false;
+            EndOperation();
             Enabled = true;
             Activate();
         }
@@ -1021,7 +1103,8 @@ public partial class MainForm
 
     private async Task RunWimDiscardUnmountAsync(WimMountedImageInfo image)
     {
-        _operationActive = true;
+        if (!TryBeginOperation("Discard WIM"))
+            return;
         UpdateSelectedDiskPanel();
         Enabled = false;
 
@@ -1050,7 +1133,7 @@ public partial class MainForm
         {
             progressDialog.AllowClose();
             progressDialog.Close();
-            _operationActive = false;
+            EndOperation();
             Enabled = true;
             Activate();
         }
@@ -1073,7 +1156,8 @@ public partial class MainForm
 
     private async Task RunPendingWimUnmountAsync(WimMountedImageInfo image)
     {
-        _operationActive = true;
+        if (!TryBeginOperation("Finish Unmount"))
+            return;
         UpdateSelectedDiskPanel();
         Enabled = false;
 
@@ -1102,7 +1186,7 @@ public partial class MainForm
         {
             progressDialog.AllowClose();
             progressDialog.Close();
-            _operationActive = false;
+            EndOperation();
             Enabled = true;
             Activate();
         }
@@ -1178,7 +1262,8 @@ public partial class MainForm
         if (confirm != DialogResult.Yes)
             return;
 
-        _operationActive = true;
+        if (!TryBeginOperation("Remount WIM"))
+            return;
         UpdateSelectedDiskPanel();
         Enabled = false;
 
@@ -1205,7 +1290,7 @@ public partial class MainForm
         {
             progressDialog.AllowClose();
             progressDialog.Close();
-            _operationActive = false;
+            EndOperation();
             Enabled = true;
             Activate();
         }
@@ -1265,7 +1350,8 @@ public partial class MainForm
         if (confirm != DialogResult.Yes)
             return;
 
-        _operationActive = true;
+        if (!TryBeginOperation("Cleanup Mounts"))
+            return;
         UpdateSelectedDiskPanel();
         Enabled = false;
 
@@ -1291,7 +1377,7 @@ public partial class MainForm
         {
             progressDialog.AllowClose();
             progressDialog.Close();
-            _operationActive = false;
+            EndOperation();
             Enabled = true;
             Activate();
         }
@@ -1326,6 +1412,7 @@ public partial class MainForm
         string imageRoot;
         string targetLabel;
         bool changesRequireCommit;
+        ImagingDiskInfo? targetDisk = null;
 
         if (mountedWim != null)
         {
@@ -1350,6 +1437,7 @@ public partial class MainForm
         }
         else if (partition != null && TryGetOfflineWindowsRoot(partition, out string offlineWindowsRoot))
         {
+            targetDisk = GetSelectedDisk();
             imageRoot = offlineWindowsRoot;
             targetLabel = $"Offline Windows installation:\n{GetPartitionDisplayName(partition)} — {offlineWindowsRoot}";
             changesRequireCommit = false;
@@ -1390,16 +1478,18 @@ public partial class MainForm
         if (confirm != DialogResult.Yes)
             return;
 
-        await RunAddDriversAsync(imageRoot, targetLabel, driverFullPath, changesRequireCommit);
+        await RunAddDriversAsync(imageRoot, targetLabel, driverFullPath, changesRequireCommit, targetDisk);
     }
 
     private async Task RunAddDriversAsync(
         string imageRoot,
         string targetLabel,
         string driverFolder,
-        bool changesRequireCommit)
+        bool changesRequireCommit,
+        ImagingDiskInfo? targetDisk)
     {
-        _operationActive = true;
+        if (!TryBeginOperation("Add Drivers", targetDisk))
+            return;
         UpdateSelectedDiskPanel();
         Enabled = false;
 
@@ -1428,7 +1518,7 @@ public partial class MainForm
         {
             progressDialog.AllowClose();
             progressDialog.Close();
-            _operationActive = false;
+            EndOperation();
             Enabled = true;
             UpdateSelectedDiskPanel();
             Activate();
@@ -1527,17 +1617,26 @@ public partial class MainForm
         if (confirm.ShowDialog(this) != DialogResult.OK)
             return;
 
-        if (File.Exists(destinationFullPath))
+        await RunWimExportAsync(sourceFullPath, destinationFullPath, confirm.SelectedImage);
+    }
+
+    private async Task RunWimExportAsync(string sourcePath, string destinationPath, WimImageInfo image)
+    {
+        if (!TryBeginOperation("Export WIM"))
+            return;
+
+        if (File.Exists(destinationPath))
         {
             try
             {
-                File.Delete(destinationFullPath);
+                File.Delete(destinationPath);
             }
             catch (Exception ex)
             {
+                EndOperation();
                 MessageBox.Show(
                     this,
-                    $"The existing destination WIM could not be replaced:\n\n{destinationFullPath}\n\n{ex.Message}",
+                    $"The existing destination WIM could not be replaced:\n\n{destinationPath}\n\n{ex.Message}",
                     "Export WIM",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
@@ -1545,12 +1644,6 @@ public partial class MainForm
             }
         }
 
-        await RunWimExportAsync(sourceFullPath, destinationFullPath, confirm.SelectedImage);
-    }
-
-    private async Task RunWimExportAsync(string sourcePath, string destinationPath, WimImageInfo image)
-    {
-        _operationActive = true;
         UpdateSelectedDiskPanel();
         Enabled = false;
 
@@ -1578,7 +1671,7 @@ public partial class MainForm
         {
             progressDialog.AllowClose();
             progressDialog.Close();
-            _operationActive = false;
+            EndOperation();
             Enabled = true;
             UpdateSelectedDiskPanel();
             Activate();
@@ -1646,6 +1739,10 @@ public partial class MainForm
         if (imageInfo == null)
             return;
 
+        if (!TryBeginOperation("Apply WIM", disk))
+            return;
+        UpdateSelectedDiskPanel();
+
         TemporaryDriveLetterResult? temporaryTargetMount = null;
         string targetRoot;
         bool operationRan = false;
@@ -1653,7 +1750,7 @@ public partial class MainForm
         {
             if (!TryGetPartitionCaptureRoot(partition, out targetRoot))
             {
-                UseWaitCursor = true;
+                SetWaitCursorState(true);
                 TemporaryDriveLetterResult mountResult;
                 try
                 {
@@ -1661,7 +1758,7 @@ public partial class MainForm
                 }
                 finally
                 {
-                    UseWaitCursor = false;
+                    SetWaitCursorState(false);
                 }
 
                 if (!mountResult.Success)
@@ -1708,12 +1805,95 @@ public partial class MainForm
 
             WimImageInfo selectedImage = confirm.SelectedImage;
             bool configureBootFiles = confirm.ConfigureBootFiles;
+            string effectiveImagePath = imagePath;
+
+            if (confirm.AssignTargetToC &&
+                !partition.DriveLetters.Any(static drive =>
+                    string.Equals(
+                        ImagingPath.NormalizeDriveRoot(drive),
+                        @"C:\",
+                        StringComparison.OrdinalIgnoreCase)))
+            {
+                SetWaitCursorState(true);
+                try
+                {
+                    if (temporaryTargetMount != null)
+                    {
+                        DriveLetterReassignmentResult displacedC = _driveLetterReassignment.MoveCToLowestAvailable(
+                            AppContext.BaseDirectory,
+                            temporaryTargetMount.DriveLetter);
+                        if (!displacedC.Success)
+                        {
+                            MessageBox.Show(
+                                this,
+                                "Imaging Manager could not make C: available for the selected target.\n\n" + displacedC.Error,
+                                "Apply WIM - Drive Letter",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Warning);
+                            return;
+                        }
+
+                        effectiveImagePath = DriveLetterReassignmentService.RebasePathFromDisplacedC(
+                            effectiveImagePath,
+                            displacedC.DisplacedCRoot);
+                    }
+
+                    DriveLetterReassignmentResult cResult = _driveLetterReassignment.ReassignPartitionToC(
+                        disk.DiskNumber,
+                        partition.PartitionNumber,
+                        targetRoot,
+                        AppContext.BaseDirectory);
+
+                    if (!cResult.Success)
+                    {
+                        MessageBox.Show(
+                            this,
+                            "Imaging Manager could not reassign the selected target partition to C:.\n\n" + cResult.Error,
+                            "Apply WIM - Drive Letter",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    targetRoot = cResult.TargetRoot;
+                    effectiveImagePath = DriveLetterReassignmentService.RebasePathFromDisplacedC(
+                        effectiveImagePath,
+                        cResult.DisplacedCRoot);
+
+                    if (temporaryTargetMount != null)
+                    {
+                        // The target no longer owns its temporary letter after becoming C:.
+                        _temporaryDriveLetters.ReleaseReservation(temporaryTargetMount);
+                        temporaryTargetMount = null;
+                    }
+                }
+                finally
+                {
+                    SetWaitCursorState(false);
+                }
+
+                if (!File.Exists(effectiveImagePath))
+                {
+                    MessageBox.Show(
+                        this,
+                        $"The selected WIM file is no longer accessible after reassigning the target to C:.\n\n{effectiveImagePath}",
+                        "Apply WIM",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
+                    return;
+                }
+            }
+            else if (confirm.AssignTargetToC)
+            {
+                targetRoot = @"C:\";
+            }
+
             operationRan = true;
             await RunWimApplyAsync(
                 partition,
                 targetRoot,
                 fileSystemResult.FileSystem,
-                imagePath,
+                effectiveImagePath,
                 selectedImage,
                 configureBootFiles);
         }
@@ -1734,8 +1914,10 @@ public partial class MainForm
                 }
             }
 
+            EndOperation();
+
             if (temporaryTargetMount != null || operationRan)
-                LoadDisks(disk.DiskNumber);
+                await RequestDiskRefreshAsync(disk.DiskNumber);
         }
     }
 
@@ -1763,10 +1945,8 @@ public partial class MainForm
         WimImageInfo image,
         bool configureBootFiles)
     {
-        _operationActive = true;
-        UpdateSelectedDiskPanel();
         Enabled = false;
-        UseWaitCursor = true;
+        SetWaitCursorState(true);
 
         PartitionFormatResult formatResult;
         try
@@ -1782,12 +1962,11 @@ public partial class MainForm
         }
         finally
         {
-            UseWaitCursor = false;
+            SetWaitCursorState(false);
         }
 
         if (!formatResult.Success)
         {
-            _operationActive = false;
             Enabled = true;
             Activate();
             MessageBox.Show(
@@ -1835,7 +2014,6 @@ public partial class MainForm
             progressDialog.AllowClose();
             progressDialog.Close();
             cts.Dispose();
-            _operationActive = false;
             Enabled = true;
             Activate();
         }
@@ -1896,8 +2074,6 @@ public partial class MainForm
         bool stagedWinRe,
         bool appendToExistingWim)
     {
-        _operationActive = true;
-        UpdateSelectedDiskPanel();
         Enabled = false;
 
         using WimCaptureProgressDialog progressDialog = new(partition, sourceRoot, imagePath);
@@ -1935,7 +2111,6 @@ public partial class MainForm
             progressDialog.AllowClose();
             progressDialog.Close();
             cts.Dispose();
-            _operationActive = false;
             Enabled = true;
             Activate();
         }
@@ -2007,7 +2182,29 @@ public partial class MainForm
         string imagePath,
         Func<IProgress<FfuOperationProgress>, CancellationToken, Task<FfuOperationResult>> operation)
     {
-        _operationActive = true;
+        string operationName = kind == FfuOperationKind.Apply ? "Apply FFU" : "Capture FFU";
+        if (!TryBeginOperation(operationName, disk))
+            return;
+
+        if (kind == FfuOperationKind.Capture && File.Exists(imagePath))
+        {
+            try
+            {
+                File.Delete(imagePath);
+            }
+            catch (Exception ex)
+            {
+                EndOperation();
+                MessageBox.Show(
+                    this,
+                    $"The existing FFU could not be replaced:\n\n{imagePath}\n\n{ex.Message}",
+                    "Capture FFU",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                return;
+            }
+        }
+
         UpdateSelectedDiskPanel();
         Enabled = false;
 
@@ -2031,7 +2228,7 @@ public partial class MainForm
             progressDialog.AllowClose();
             progressDialog.Close();
             cts.Dispose();
-            _operationActive = false;
+            EndOperation();
             Enabled = true;
             Activate();
         }
@@ -2065,7 +2262,7 @@ public partial class MainForm
                 MessageBoxIcon.Information);
         }
 
-        LoadDisks(disk.DiskNumber);
+        await RequestDiskRefreshAsync(disk.DiskNumber);
     }
 
 

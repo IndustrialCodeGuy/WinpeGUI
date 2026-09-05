@@ -1,4 +1,4 @@
-using Shared.Shell.Interop;
+﻿using Shared.Shell.Interop;
 
 namespace Imaging.Manager;
 
@@ -237,6 +237,23 @@ public partial class MainForm
         return new Rectangle(x, y, width, height);
     }
 
+    private void CenterInitialWindow()
+    {
+        Rectangle workingArea = Screen.FromPoint(Cursor.Position).WorkingArea;
+        int gap = Math.Max(4, ScaleDip(8));
+        Rectangle available = Rectangle.Inflate(workingArea, -gap, -gap);
+        if (available.Width <= 0 || available.Height <= 0)
+            available = workingArea;
+
+        int width = Math.Min(Math.Max(1, Width), available.Width);
+        int height = Math.Min(Math.Max(1, Height), available.Height);
+        int x = available.Left + Math.Max(0, (available.Width - width) / 2);
+        int y = available.Top + Math.Max(0, (available.Height - height) / 2);
+
+        StartPosition = FormStartPosition.Manual;
+        Bounds = new Rectangle(x, y, width, height);
+    }
+
     private static Font CreateUiPixelFont(string familyName, float size, FontStyle style)
     {
         float safe = size > 0f ? size : 12f;
@@ -292,7 +309,7 @@ public partial class MainForm
         public int DiskTileStatusTopDip { get; init; } = 46;
         public int DiskTileStatusHeightDip { get; init; } = 18;
 
-        public int PartitionTileMinimumWidthDip { get; init; } = 100;
+        public int PartitionTileMinimumWidthDip { get; init; } = 112;
         public int PartitionTileHeightDip { get; init; } = 56;
         public int PartitionTileIconTopDip { get; init; } = 4;
         public int PartitionTileIconSizeDip { get; init; } = 18;
@@ -304,7 +321,6 @@ public partial class MainForm
         public int PartitionTileUsedTopDip { get; init; } = 44;
         public int PartitionTileUsedHeightDip { get; init; } = 18;
         public int PartitionTilePadXDip { get; init; } = 5;
-        public int MountedWimTileWidthDip { get; init; } = 188;
 
         public float ChromeFontSizePt { get; init; } = 9f;
         public float DetailFontSizePt { get; init; } = 9f;
@@ -348,7 +364,6 @@ public partial class MainForm
         public int PartitionTileUsedTop { get; init; }
         public int PartitionTileUsedHeight { get; init; }
         public int PartitionTilePadX { get; init; }
-        public int MountedWimTileWidth { get; init; }
         public float ChromeFontSize { get; init; }
         public float DetailFontSize { get; init; }
 
@@ -398,7 +413,6 @@ public partial class MainForm
                 PartitionTileUsedTop = scale(dip.PartitionTileUsedTopDip),
                 PartitionTileUsedHeight = scale(dip.PartitionTileUsedHeightDip),
                 PartitionTilePadX = scale(dip.PartitionTilePadXDip),
-                MountedWimTileWidth = scale(dip.MountedWimTileWidthDip),
                 ChromeFontSize = scaleFont(dip.ChromeFontSizePt),
                 DetailFontSize = scaleFont(dip.DetailFontSizePt)
             };
