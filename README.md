@@ -60,8 +60,6 @@ FileManager.exe -host
 
 The taskbar and file-manager host remain separate processes so file-manager work does not block the taskbar UI thread. Companion utilities such as BitLocker Manager and Imaging Manager are launched on demand from the shell.
 
-During WinPE startup, `WinPEGui.exe` also normalizes the `C:` assignment before those shell processes are launched. It reuses the existing BitLocker OS-volume signal and offline-Windows detection used by the companion tools. A single detected Windows system volume receives `C:`. If several candidates exist but only one is on a fixed/internal physical disk, that candidate wins. Internal-versus-USB classification uses the same PnP-parent-chain test as File Manager's Eject logic, so SATA/NVMe drives behind USB/UASP bridges are treated as USB-attached even when Windows reports the logical drive as `Fixed` or the storage bus as SCSI/SATA/NVMe; `MSFT_Disk.BusType` is only a fallback if PnP ancestry cannot be resolved. When no unambiguous primary Windows volume is available, an ordinary non-Windows `C:` assignment is moved to an unused high letter so `C:` remains reserved. Ambiguous Windows candidates are not forcibly remapped, and launcher-hosting volumes are protected from reassignment.
-
 When `Imaging.Manager.exe` is present in the shell application directory, the Start menu automatically exposes an **Imaging Manager** entry. The entry follows the active shell theme and launches the companion application from that same directory. If the executable is omitted, the menu item is omitted as well.
 
 ## Requirements
