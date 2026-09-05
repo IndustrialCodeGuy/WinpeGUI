@@ -24,6 +24,22 @@ public sealed class ImagingDiskInfo
 
     public string DisplayName => $"Disk {DiskNumber}";
 
+    public string StableIdentity
+    {
+        get
+        {
+            string stableId = FirstNonEmpty(
+                StorageInfo?.UniqueId,
+                StorageInfo?.Guid,
+                StorageInfo?.SerialNumber,
+                SerialNumber);
+
+            return string.IsNullOrWhiteSpace(stableId)
+                ? $"number:{DiskNumber}"
+                : $"stable:{stableId.Trim()}";
+        }
+    }
+
     public IEnumerable<string> DriveLetters => Partitions
         .SelectMany(static p => p.DriveLetters)
         .Distinct(StringComparer.OrdinalIgnoreCase);
@@ -33,6 +49,43 @@ public sealed class ImagingDiskInfo
         string normalized = ImagingPath.NormalizeDriveRoot(driveRoot);
         return normalized.Length > 0 && DriveLetters.Any(d =>
             string.Equals(ImagingPath.NormalizeDriveRoot(d), normalized, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string FirstNonEmpty(params string?[] values) =>
+        values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
+}
+
+public sealed class ImagingInventorySnapshot
+{
+    public IReadOnlyList<ImagingDiskInfo> Disks { get; init; } = Array.Empty<ImagingDiskInfo>();
+    public IReadOnlyList<ImagingVolumeInfo> OpticalVolumes { get; init; } = Array.Empty<ImagingVolumeInfo>();
+}
+
+public sealed class ImagingVolumeInfo
+{
+    public string MountPoint { get; init; } = string.Empty;
+    public DriveType DriveType { get; init; }
+    public bool IsReady { get; init; }
+    public string VolumeLabel { get; init; } = string.Empty;
+    public string DriveFormat { get; init; } = string.Empty;
+    public ulong TotalSizeBytes { get; init; }
+    public ulong TotalFreeSpaceBytes { get; init; }
+    public ulong AvailableFreeSpaceBytes { get; init; }
+    public bool ContainsOfflineWindowsInstall { get; init; }
+    public bool IsRunningSystemDrive { get; init; }
+
+    public ulong UsedSpaceBytes =>
+        TotalSizeBytes >= TotalFreeSpaceBytes ? TotalSizeBytes - TotalFreeSpaceBytes : 0;
+
+    public string DisplayName
+    {
+        get
+        {
+            string root = MountPoint.TrimEnd('\\');
+            return string.IsNullOrWhiteSpace(VolumeLabel)
+                ? root
+                : $"{root} ({VolumeLabel})";
+        }
     }
 }
 
@@ -82,7 +135,20 @@ public sealed class ImagingPartitionInfo
     public bool BootPartition { get; init; }
     public bool PrimaryPartition { get; init; }
     public IReadOnlyList<string> DriveLetters { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<ImagingVolumeInfo> Volumes { get; init; } = Array.Empty<ImagingVolumeInfo>();
     public ImagingPartitionStorageInfo? StorageInfo { get; init; }
+
+    public string StableIdentity
+    {
+        get
+        {
+            if (!string.IsNullOrWhiteSpace(StorageInfo?.Guid))
+                return $"guid:{StorageInfo.Guid.Trim()}";
+
+            ulong offset = StorageInfo?.OffsetBytes ?? StartingOffsetBytes;
+            return $"offset:{offset}";
+        }
+    }
 }
 
 public sealed class ImagingPartitionStorageInfo

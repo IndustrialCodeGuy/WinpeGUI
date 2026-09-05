@@ -1,6 +1,7 @@
 using BitLocker.Core;
 using System.Globalization;
 using System.Management;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Imaging.Core;
@@ -9,15 +10,19 @@ public sealed class DiskInventory
 {
     private static readonly Regex PercentageRegex = new(@"(?<value>\d{1,3}(?:\.\d+)?)\s*%", RegexOptions.Compiled);
 
-    public IReadOnlyList<ImagingDiskInfo> GetDisks()
+    public ImagingInventorySnapshot GetInventory()
     {
         BitLockerStatusSnapshot bitLockerStatus = GetBitLockerVolumesBestEffort();
         IReadOnlyList<BitLockerVolumeInfo> bitLockerVolumes = bitLockerStatus.Volumes;
+        Dictionary<string, ImagingVolumeInfo> volumesByRoot = GetDriveVolumesBestEffort();
 
         Dictionary<int, ImagingDiskStorageInfo> storageDisks = GetStorageDisksBestEffort(out string storageDiskError);
         Dictionary<(int DiskNumber, ulong OffsetBytes), ImagingPartitionStorageInfo> storagePartitions =
             GetStoragePartitionsBestEffort(out string storagePartitionError);
-        Dictionary<int, List<ImagingPartitionInfo>> partitionsByDisk = GetPartitions(storagePartitions);
+        Dictionary<string, IReadOnlyList<string>> logicalDriveMap =
+            GetLogicalDriveMapBestEffort(out bool logicalDriveMapAvailable);
+        Dictionary<int, List<ImagingPartitionInfo>> partitionsByDisk =
+            GetPartitions(storagePartitions, logicalDriveMap, logicalDriveMapAvailable, volumesByRoot);
         List<ImagingDiskInfo> disks = new();
 
         using ManagementObjectSearcher searcher = new(
@@ -52,6 +57,17 @@ public sealed class DiskInventory
                 string model = Convert.ToString(disk["Model"])?.Trim() ?? string.Empty;
                 string serialNumber = Convert.ToString(disk["SerialNumber"])?.Trim() ?? string.Empty;
                 ulong sizeBytes = ReadUInt64(disk["Size"]);
+                ulong effectiveSizeBytes = storageInfo is { SizeBytes: > 0 } ? storageInfo.SizeBytes : sizeBytes;
+
+                // Empty card-reader slots and similar placeholder devices are reported by
+                // Win32_DiskDrive as zero-byte disks with no partitions. They are not
+                // actionable imaging targets and only add noise to the UI.
+                if (effectiveSizeBytes == 0 &&
+                    partitions.Count == 0 &&
+                    (storageInfo == null || storageInfo.NumberOfPartitions == 0))
+                {
+                    continue;
+                }
 
                 disks.Add(new ImagingDiskInfo
                 {
@@ -76,8 +92,19 @@ public sealed class DiskInventory
             }
         }
 
-        return disks.OrderBy(static d => d.DiskNumber).ToArray();
+        ImagingVolumeInfo[] opticalVolumes = volumesByRoot.Values
+            .Where(static volume => volume.DriveType == DriveType.CDRom && volume.IsReady)
+            .OrderBy(static volume => volume.MountPoint, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return new ImagingInventorySnapshot
+        {
+            Disks = disks.OrderBy(static d => d.DiskNumber).ToArray(),
+            OpticalVolumes = opticalVolumes
+        };
     }
+
+    public IReadOnlyList<ImagingDiskInfo> GetDisks() => GetInventory().Disks;
 
     public static ImagingDiskInfo? FindDiskForPath(IEnumerable<ImagingDiskInfo> disks, string? path)
     {
@@ -204,7 +231,10 @@ public sealed class DiskInventory
     }
 
     private static Dictionary<int, List<ImagingPartitionInfo>> GetPartitions(
-        IReadOnlyDictionary<(int DiskNumber, ulong OffsetBytes), ImagingPartitionStorageInfo> storagePartitions)
+        IReadOnlyDictionary<(int DiskNumber, ulong OffsetBytes), ImagingPartitionStorageInfo> storagePartitions,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> logicalDriveMap,
+        bool logicalDriveMapAvailable,
+        IReadOnlyDictionary<string, ImagingVolumeInfo> volumesByRoot)
     {
         Dictionary<int, List<ImagingPartitionInfo>> result = new();
 
@@ -226,6 +256,24 @@ public sealed class DiskInventory
                     ? storageInfo.PartitionNumber
                     : win32PartitionIndex + 1;
 
+                IReadOnlyList<string> driveLetters = GetPartitionDriveLetters(
+                    deviceId,
+                    storageInfo,
+                    logicalDriveMap,
+                    logicalDriveMapAvailable);
+
+                ImagingVolumeInfo[] partitionVolumes = driveLetters
+                    .Select(root =>
+                    {
+                        string normalized = ImagingPath.NormalizeDriveRoot(root);
+                        if (normalized.Length > 0 && volumesByRoot.TryGetValue(normalized, out ImagingVolumeInfo? volume))
+                            return volume;
+
+                        return ProbeVolumeBestEffort(normalized);
+                    })
+                    .OfType<ImagingVolumeInfo>()
+                    .ToArray();
+
                 ImagingPartitionInfo info = new()
                 {
                     PartitionNumber = partitionNumber,
@@ -236,7 +284,8 @@ public sealed class DiskInventory
                     StartingOffsetBytes = offset,
                     BootPartition = ReadBoolean(partition["BootPartition"]),
                     PrimaryPartition = ReadBoolean(partition["PrimaryPartition"]),
-                    DriveLetters = GetLogicalDrivesForPartition(deviceId),
+                    DriveLetters = driveLetters,
+                    Volumes = partitionVolumes,
                     StorageInfo = storageInfo
                 };
 
@@ -251,6 +300,266 @@ public sealed class DiskInventory
         }
 
         return result;
+    }
+
+    private static IReadOnlyList<string> GetPartitionDriveLetters(
+        string partitionDeviceId,
+        ImagingPartitionStorageInfo? storageInfo,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> logicalDriveMap,
+        bool logicalDriveMapAvailable)
+    {
+        HashSet<string> roots = new(StringComparer.OrdinalIgnoreCase);
+
+        if (storageInfo != null)
+        {
+            AddDriveRoot(roots, storageInfo.DriveLetter);
+            foreach (string accessPath in storageInfo.AccessPaths)
+                AddDriveRoot(roots, accessPath);
+        }
+
+        if (roots.Count == 0 &&
+            !string.IsNullOrWhiteSpace(partitionDeviceId) &&
+            logicalDriveMap.TryGetValue(partitionDeviceId, out IReadOnlyList<string>? mapped))
+        {
+            foreach (string root in mapped)
+                AddDriveRoot(roots, root);
+        }
+
+        // Preserve the original per-partition association lookup only as a last
+        // resort when the bulk association class is unavailable in the current
+        // environment and MSFT_Partition did not provide a drive letter.
+        if (roots.Count == 0 && !logicalDriveMapAvailable)
+        {
+            foreach (string root in GetLogicalDrivesForPartition(partitionDeviceId))
+                AddDriveRoot(roots, root);
+        }
+
+        return roots.OrderBy(static root => root, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static Dictionary<string, IReadOnlyList<string>> GetLogicalDriveMapBestEffort(out bool available)
+    {
+        Dictionary<string, HashSet<string>> working = new(StringComparer.OrdinalIgnoreCase);
+        available = false;
+
+        try
+        {
+            using ManagementObjectSearcher searcher = new(
+                @"root\CIMV2",
+                "SELECT Antecedent, Dependent FROM Win32_LogicalDiskToPartition");
+            using ManagementObjectCollection relations = searcher.Get();
+
+            foreach (ManagementObject relation in relations.Cast<ManagementObject>())
+            {
+                using (relation)
+                {
+                    string partitionDeviceId = ReadReferenceDeviceId(relation["Antecedent"]);
+                    string logicalDeviceId = ReadReferenceDeviceId(relation["Dependent"]);
+                    string root = ImagingPath.NormalizeDriveRoot(logicalDeviceId);
+                    if (string.IsNullOrWhiteSpace(partitionDeviceId) || root.Length == 0)
+                        continue;
+
+                    if (!working.TryGetValue(partitionDeviceId, out HashSet<string>? roots))
+                    {
+                        roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        working.Add(partitionDeviceId, roots);
+                    }
+
+                    roots.Add(root);
+                }
+            }
+
+            available = true;
+        }
+        catch
+        {
+            available = false;
+        }
+
+        return working.ToDictionary(
+            static pair => pair.Key,
+            static pair => (IReadOnlyList<string>)pair.Value
+                .OrderBy(static root => root, StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string ReadReferenceDeviceId(object? reference)
+    {
+        string text = Convert.ToString(reference, CultureInfo.InvariantCulture)?.Trim() ?? string.Empty;
+        if (text.Length == 0)
+            return string.Empty;
+
+        const string token = "DeviceID=\"";
+        int start = text.IndexOf(token, StringComparison.OrdinalIgnoreCase);
+        if (start < 0)
+            return string.Empty;
+
+        start += token.Length;
+        StringBuilder value = new();
+        bool escaped = false;
+
+        for (int i = start; i < text.Length; i++)
+        {
+            char ch = text[i];
+            if (escaped)
+            {
+                value.Append(ch);
+                escaped = false;
+                continue;
+            }
+
+            if (ch == '\\')
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (ch == '"')
+                break;
+
+            value.Append(ch);
+        }
+
+        return value.ToString();
+    }
+
+    private static void AddDriveRoot(ISet<string> roots, string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
+        string normalized = ImagingPath.NormalizeDriveRoot(path);
+        if (normalized.Length == 3 && normalized[1] == ':')
+            roots.Add(normalized);
+    }
+
+    private static Dictionary<string, ImagingVolumeInfo> GetDriveVolumesBestEffort()
+    {
+        Dictionary<string, ImagingVolumeInfo> result = new(StringComparer.OrdinalIgnoreCase);
+
+        DriveInfo[] drives;
+        try
+        {
+            drives = DriveInfo.GetDrives();
+        }
+        catch
+        {
+            return result;
+        }
+
+        foreach (DriveInfo drive in drives)
+        {
+            ImagingVolumeInfo? volume = ProbeVolumeBestEffort(drive);
+            if (volume == null || string.IsNullOrWhiteSpace(volume.MountPoint))
+                continue;
+
+            result[volume.MountPoint] = volume;
+        }
+
+        return result;
+    }
+
+    private static ImagingVolumeInfo? ProbeVolumeBestEffort(string? driveRoot)
+    {
+        string normalized = ImagingPath.NormalizeDriveRoot(driveRoot);
+        if (normalized.Length == 0)
+            return null;
+
+        try
+        {
+            return ProbeVolumeBestEffort(new DriveInfo(normalized));
+        }
+        catch
+        {
+            return new ImagingVolumeInfo { MountPoint = normalized };
+        }
+    }
+
+    private static ImagingVolumeInfo? ProbeVolumeBestEffort(DriveInfo drive)
+    {
+        string root;
+        try
+        {
+            root = ImagingPath.NormalizeDriveRoot(drive.Name);
+        }
+        catch
+        {
+            return null;
+        }
+
+        if (root.Length == 0)
+            return null;
+
+        DriveType driveType = DriveType.Unknown;
+        bool isReady = false;
+        string volumeLabel = string.Empty;
+        string driveFormat = string.Empty;
+        ulong total = 0;
+        ulong totalFree = 0;
+        ulong availableFree = 0;
+
+        try { driveType = drive.DriveType; } catch { }
+        try { isReady = drive.IsReady; } catch { }
+
+        if (isReady)
+        {
+            try { volumeLabel = drive.VolumeLabel ?? string.Empty; } catch { }
+            try { driveFormat = drive.DriveFormat ?? string.Empty; } catch { }
+            try { total = (ulong)Math.Max(0L, drive.TotalSize); } catch { }
+            try { totalFree = (ulong)Math.Max(0L, drive.TotalFreeSpace); } catch { }
+            try { availableFree = (ulong)Math.Max(0L, drive.AvailableFreeSpace); } catch { }
+        }
+
+        bool isRunningSystemDrive = IsRunningSystemDrive(root);
+        bool canContainWindowsInstall = driveType is DriveType.Fixed or DriveType.Removable;
+        bool containsOfflineWindows = isReady &&
+                                      canContainWindowsInstall &&
+                                      !isRunningSystemDrive &&
+                                      ContainsOfflineWindowsInstall(root);
+
+        return new ImagingVolumeInfo
+        {
+            MountPoint = root,
+            DriveType = driveType,
+            IsReady = isReady,
+            VolumeLabel = volumeLabel,
+            DriveFormat = driveFormat,
+            TotalSizeBytes = total,
+            TotalFreeSpaceBytes = totalFree,
+            AvailableFreeSpaceBytes = availableFree,
+            ContainsOfflineWindowsInstall = containsOfflineWindows,
+            IsRunningSystemDrive = isRunningSystemDrive
+        };
+    }
+
+    private static bool IsRunningSystemDrive(string driveRoot)
+    {
+        try
+        {
+            string systemRoot = ImagingPath.NormalizeDriveRoot(
+                Path.GetPathRoot(Environment.SystemDirectory) ?? string.Empty);
+            return string.Equals(driveRoot, systemRoot, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool ContainsOfflineWindowsInstall(string driveRoot)
+    {
+        try
+        {
+            if (string.Equals(driveRoot, @"X:\", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return File.Exists(Path.Combine(driveRoot, "Windows", "System32", "Config", "SYSTEM"));
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static IReadOnlyList<string> GetLogicalDrivesForPartition(string partitionDeviceId)
