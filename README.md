@@ -116,11 +116,11 @@ Features whose supporting WinPE components are absent may be unavailable or fail
 
 ## Imaging Manager
 
-Imaging Manager is a companion application for physical-disk, partition, and WIM-file operations from WinPE. The main view uses a Disk Management-style layout: each physical disk has its own compact disk selector showing size and online/offline state beside a proportional partition strip, followed by a separate strip for currently mounted WIM images. Only one disk, partition, or mounted WIM owns the active selection at a time.
+Imaging Manager is a companion application for physical-disk, partition, and WIM-file operations from WinPE. The main view uses a Disk Management-style layout: each physical disk has its own compact disk selector showing size and online/offline state beside a proportional partition strip, followed by read-only optical-media and mounted-WIM strips when applicable. Only one disk, partition, optical volume, or mounted WIM owns the active selection at a time.
 
 The main command layout is split into two full-width strips:
 
-- A **global command strip** above the disks contains **Mount WIM** and **Export WIM** on the left, with **Refresh** pinned to the right. **Cleanup Mounts** remains visible on the left as a system-wide recovery action and is enabled only when DISM reports one or more **Invalid** mounted WIMs. These commands do not depend on the active disk/partition/WIM selection and leave room for additional global actions later.
+- A **global command strip** above the disks contains **Mount WIM** and **Export WIM** on the left, with **Refresh** pinned to the right. **Cleanup Mounts** remains visible on the left as a system-wide recovery action and is enabled only when DISM reports one or more **Invalid** mounted WIMs. These commands do not depend on the active disk/partition/optical/WIM selection and leave room for additional global actions later.
 - A **contextual command strip** below the disk/WIM selector shows the current target on the left and only the actions that apply to that selection on the right.
 
 The contextual actions are:
@@ -139,6 +139,9 @@ Apply WIM
 Add Drivers    (recognized offline Windows installation only)
 Unlock         (locked BitLocker partition only)
 
+Optical media selected:
+Get Info
+
 Mounted WIM selected (status OK):
 Get Info
 Unmount WIM
@@ -152,7 +155,7 @@ Mounted WIM selected (Invalid):
 Get Info
 ```
 
-Availability still follows the current disk/partition/mounted-WIM selection, BitLocker state, and DISM mounted-image inventory. A read-only mounted WIM keeps **Add Drivers** visible but disabled. **Get Info** opens the detailed information for the current selection instead of keeping a permanent information pane on screen.
+Availability still follows the current disk/partition/optical/mounted-WIM selection, BitLocker state, and DISM mounted-image inventory. A read-only mounted WIM keeps **Add Drivers** visible but disabled. **Get Info** opens the detailed information for the current selection instead of keeping a permanent information pane on screen.
 
 ### Physical disk and FFU operations
 
@@ -233,7 +236,7 @@ Windows\System32\Config\SYSTEM
 
 Blank, data, and test partitions therefore default to leaving the machine boot configuration unchanged. The user can override the option in either direction before starting the apply.
 
-The same confirmation dialog also includes **Assign the target partition to C: before applying the image**. It is off by default, so Apply WIM normally preserves the target partition's current WinPE drive letter (or uses the normal temporary-letter path for an unlettered partition). When explicitly selected, Imaging Manager makes C: available, reassigns the chosen target to C:, and rebases the source WIM path if the displaced C: volume contains that WIM. No drive-letter normalization is performed at WinPEGUI startup.
+The same confirmation dialog also includes **Assign the target partition to C: before applying the image**. It is on by default. When selected, Imaging Manager makes C: available, reassigns the chosen target to C:, and rebases the source WIM path if the displaced C: volume contains that WIM. Clearing the option preserves the target partition's current WinPE drive letter (or uses the normal temporary-letter path for an unlettered partition). No drive-letter normalization is performed at WinPEGUI startup.
 
 When boot configuration is requested and the successfully applied image contains a Windows directory, Imaging Manager runs BCDBoot against the restored Windows installation. Regular Apply WIM does not hard-code a system-partition drive letter; BCDBoot is allowed to use the existing firmware/system-partition configuration. If boot configuration is requested but the applied image does not contain Windows, the image apply itself succeeds and Imaging Manager reports that the BCDBoot step was skipped.
 
@@ -279,7 +282,7 @@ An existing destination requires explicit replacement confirmation. The source a
 
 ### Mount WIM
 
-Mount WIM is a file-based operation and does not require a disk or partition selection.
+Mount WIM is a file-based operation and does not require a disk or partition selection. Mounted ISO/optical volumes are shown in a separate read-only **Optical Media** row; selecting one before **Mount WIM** opens the file picker at that drive, making WIM files stored on mounted installation media directly accessible.
 
 Imaging Manager:
 
