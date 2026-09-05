@@ -35,7 +35,7 @@ internal sealed class ExplorerApplicationContext : ApplicationContext, IExplorer
     private readonly IExplorerDirectoryService _directoryService;
     private readonly ExplorerWindowRegistry _windowRegistry;
     private readonly RefreshCoordinator _refreshCoordinator;
-    private readonly DriveTopologyMonitor _driveTopologyMonitor;
+    private readonly StorageChangeCoordinator _storageChangeCoordinator;
     private readonly ExplorerWindowFactory _windowFactory;
     private readonly ExplorerInstanceServer _instanceServer;
     private readonly ExplorerPickerService _pickerService;
@@ -43,7 +43,6 @@ internal sealed class ExplorerApplicationContext : ApplicationContext, IExplorer
     private readonly ExplorerIconCache _iconCache;
     private readonly IExplorerCommandService _commandService;
     private readonly ExplorerFileAssociationService _fileAssociations;
-    private readonly BitLockerStateMonitor? _bitLockerStateMonitor;
     private ExplorerWindowPlacement? _lastBrowseWindowPlacement;
     private int _activeFileOperationCount;
     private bool _idleMemoryCompactionQueued;
@@ -68,9 +67,7 @@ internal sealed class ExplorerApplicationContext : ApplicationContext, IExplorer
 
         _windowRegistry = new ExplorerWindowRegistry();
         _refreshCoordinator = new RefreshCoordinator(_driveStateStore, _windowRegistry);
-        _driveTopologyMonitor = new DriveTopologyMonitor(_uiContext);
-        if (_bitLockerCapabilities.IsAvailable)
-            _bitLockerStateMonitor = new BitLockerStateMonitor(_uiContext);
+        _storageChangeCoordinator = new StorageChangeCoordinator(_uiContext, _bitLockerCapabilities.IsAvailable);
         _iconCache = new ExplorerIconCache();
         _iconCache.WarmCoreImages(SystemInformation.SmallIconSize.Width);
 
@@ -89,12 +86,8 @@ internal sealed class ExplorerApplicationContext : ApplicationContext, IExplorer
             _uiContext);
 
         _sharedDriveStateManager.DriveStatesChanged += SharedDriveStateManager_DriveStatesChanged;
-        _driveTopologyMonitor.TopologyChanged += DriveTopologyMonitor_TopologyChanged;
-        if (_bitLockerStateMonitor is not null)
-            _bitLockerStateMonitor.BitLockerStateChanged += BitLockerStateMonitor_BitLockerStateChanged;
-
-        _driveTopologyMonitor.Start();
-        _bitLockerStateMonitor?.Start();
+        _storageChangeCoordinator.StorageChanged += StorageChangeCoordinator_StorageChanged;
+        _storageChangeCoordinator.Start();
 
         _instanceServer = new ExplorerInstanceServer(request =>
         {
@@ -295,17 +288,18 @@ internal sealed class ExplorerApplicationContext : ApplicationContext, IExplorer
         }
     }
 
-    private void DriveTopologyMonitor_TopologyChanged(object? sender, RefreshReason reason)
+    private void StorageChangeCoordinator_StorageChanged(object? sender, StorageChangeEventArgs e)
     {
-        _refreshCoordinator.HandleTopologyChanged(reason);
-    }
+        if (e.Kind == StorageChangeKind.Topology)
+        {
+            _refreshCoordinator.HandleTopologyChanged(e.Reason);
+            return;
+        }
 
-    private void BitLockerStateMonitor_BitLockerStateChanged(object? sender, string? driveRoot)
-    {
-        if (string.IsNullOrWhiteSpace(driveRoot))
+        if (string.IsNullOrWhiteSpace(e.DriveRoot))
             _driveStateStore.RequestBitLockerStatesRefresh();
         else
-            _driveStateStore.RequestBitLockerStateRefresh(driveRoot);
+            _driveStateStore.RequestBitLockerStateRefresh(e.DriveRoot);
     }
 
     private void SharedDriveStateManager_DriveStatesChanged(object? sender, DriveStatesChangedEventArgs e)
@@ -2011,13 +2005,10 @@ internal sealed class ExplorerApplicationContext : ApplicationContext, IExplorer
         _isExiting = true;
 
         _sharedDriveStateManager.DriveStatesChanged -= SharedDriveStateManager_DriveStatesChanged;
-        _driveTopologyMonitor.TopologyChanged -= DriveTopologyMonitor_TopologyChanged;
-        if (_bitLockerStateMonitor is not null)
-            _bitLockerStateMonitor.BitLockerStateChanged -= BitLockerStateMonitor_BitLockerStateChanged;
+        _storageChangeCoordinator.StorageChanged -= StorageChangeCoordinator_StorageChanged;
         _pickerServer.Dispose();
         _instanceServer.Dispose();
-        _bitLockerStateMonitor?.Dispose();
-        _driveTopologyMonitor.Dispose();
+        _storageChangeCoordinator.Dispose();
         _iconCache.Dispose();
         base.ExitThreadCore();
     }
