@@ -1,5 +1,6 @@
 using BitLocker.Core;
 using Shared.Shell.Utilities;
+using Shell.Infrastructure.Coordination;
 
 namespace BitLocker.Manager;
 
@@ -8,6 +9,7 @@ public partial class MainForm : Form
     // Launch state and backend
     private readonly BitLockerLaunchArgs _launchArgs;
     private readonly IBitLockerBackend _backend;
+    private StorageChangeCoordinator? _storageChangeCoordinator;
 
     // Main layout controls
     private SplitContainer _splitMain = null!;
@@ -71,6 +73,15 @@ public partial class MainForm : Form
 
         InitializeVolumeUi();
         ApplyBitLockerMinimumSize();
+
+        SynchronizationContext uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
+        if (SynchronizationContext.Current is null)
+            SynchronizationContext.SetSynchronizationContext(uiContext);
+
+        _storageChangeCoordinator = new StorageChangeCoordinator(uiContext, monitorBitLocker: true);
+        _storageChangeCoordinator.StorageChanged += StorageChangeCoordinator_StorageChanged;
+        _storageChangeCoordinator.Start();
+
         LoadVolumes(selectLaunchDrive: true);
     }
 
@@ -99,6 +110,13 @@ public partial class MainForm : Form
     {
         if (disposing)
         {
+            if (_storageChangeCoordinator is not null)
+            {
+                _storageChangeCoordinator.StorageChanged -= StorageChangeCoordinator_StorageChanged;
+                _storageChangeCoordinator.Dispose();
+                _storageChangeCoordinator = null;
+            }
+
             foreach (Image image in _driveImagesByKind.Values.Distinct())
                 image.Dispose();
 
@@ -112,4 +130,9 @@ public partial class MainForm : Form
 
         base.Dispose(disposing);
     }
+    private void StorageChangeCoordinator_StorageChanged(object? sender, StorageChangeEventArgs e)
+    {
+        LoadVolumes(selectLaunchDrive: false);
+    }
+
 }
