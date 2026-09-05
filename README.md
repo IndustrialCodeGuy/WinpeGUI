@@ -233,6 +233,8 @@ Windows\System32\Config\SYSTEM
 
 Blank, data, and test partitions therefore default to leaving the machine boot configuration unchanged. The user can override the option in either direction before starting the apply.
 
+The same confirmation dialog also includes **Assign the target partition to C: before applying the image**. It is off by default, so Apply WIM normally preserves the target partition's current WinPE drive letter (or uses the normal temporary-letter path for an unlettered partition). When explicitly selected, Imaging Manager makes C: available, reassigns the chosen target to C:, and rebases the source WIM path if the displaced C: volume contains that WIM. No drive-letter normalization is performed at WinPEGUI startup.
+
 When boot configuration is requested and the successfully applied image contains a Windows directory, Imaging Manager runs BCDBoot against the restored Windows installation. Regular Apply WIM does not hard-code a system-partition drive letter; BCDBoot is allowed to use the existing firmware/system-partition configuration. If boot configuration is requested but the applied image does not contain Windows, the image apply itself succeeds and Imaging Manager reports that the BCDBoot step was skipped.
 
 ### Deploy WIM
@@ -254,11 +256,13 @@ For BIOS systems, the deployment workflow creates an MBR layout containing:
 - Windows partition.
 - Windows Recovery partition.
 
+The Deploy confirmation dialog includes **Assign the deployed Windows partition to C: in WinPE**. It remains enabled by default to preserve the established deployment behavior. If cleared, Imaging Manager reserves an unused temporary drive letter for the new Windows partition and carries that letter consistently through DISM, BCDBoot, and Windows RE configuration; existing C: is left untouched.
+
 Deploy WIM then:
 
 1. Cleans/repartitions the selected physical disk.
-2. Applies the selected WIM image to the new Windows partition.
-3. Requires the applied image to contain `C:\Windows`.
+2. Applies the selected WIM image to the new Windows partition using the selected C: or temporary WinPE access letter.
+3. Requires the applied image to contain a Windows directory at that deployment access path.
 4. Configures boot files with BCDBoot against the newly created System partition.
 5. If `winre.wim` is present in the applied Windows image, copies it to the new Recovery partition and registers it with REAgentC.
 6. Hides the Recovery partition and verifies the Windows RE configuration where possible.
@@ -330,7 +334,7 @@ For a mounted WIM, driver changes remain pending until **Commit** saves them to 
 
 For disks and partitions, the details window supplements the existing Win32/WMI inventory with the native `MSFT_Disk` and `MSFT_Partition` storage-provider data used by the Windows Storage stack. Disk details include identity, model/firmware, size/allocation, partition style, bus/provisioning type, operational/health state, online/read-only/system/boot flags, sector sizes, free extent, unique ID/GUID/signature, and location where available. Partition details include disk/partition identity, drive/access paths, size/offset, GPT/MBR type, operational/transition state, read-only/offline/system/boot/active/hidden attributes, volume capacity/filesystem information for accessible lettered volumes, and BitLocker details. The application queries these providers directly and does not require PowerShell; if the Storage WMI provider is unavailable in a minimal PE image, the dialog falls back to the information available from the existing Win32 inventory.
 
-**Refresh** re-queries both the physical-disk inventory and DISM's mounted-WIM inventory. This allows Imaging Manager to recognize WIM mount/unmount activity that occurred outside the application.
+**Refresh** re-queries both the physical-disk inventory and DISM's mounted-WIM inventory. Physical-disk inventory refresh is asynchronous and coalesced, and Imaging Manager also listens for storage-topology and BitLocker-state changes so inserted/removed drives and lock-state changes can be reflected without a manual refresh. Imaging/servicing operations remain intentionally serialized: only one operation is started at a time, while the live disk inventory may continue to refresh in the background.
 
 ### Imaging safety checks
 
@@ -343,6 +347,7 @@ Current imaging safeguards include:
 - WIM apply prevents using a source WIM stored on the selected target partition.
 - Apply WIM verifies that its destructive target format actually occurred before starting DISM.
 - Apply WIM configures boot files only when the user-selected BCDBoot option is enabled.
+- Apply/Deploy WIM change the target to C: only when their confirmation-dialog option requests it; WinPEGUI does not globally normalize drive letters.
 - Deploy WIM requires explicit whole-disk targeting and recreates the target partition layout.
 - Export WIM prevents using the same file as both source and destination and removes incomplete output after failure/cancellation.
 - Imaging Manager avoids deleting an existing WIM if an append operation fails or is canceled.
@@ -600,12 +605,15 @@ Important scenarios include:
 - New Capture WIM `/Compress:max` behavior.
 - WIM replace and append-to-existing-WIM behavior.
 - Multi-index WIM enumeration and image selection.
+- Imaging Manager live refresh after drive insertion/removal and external BitLocker lock-state changes, including refreshes while an imaging operation is active.
 - Apply WIM target quick-format and marker verification.
+- Apply WIM with **Assign target to C:** both cleared and selected, including a case where C: is already occupied by another volume.
 - Apply WIM to an existing Windows partition with BCDBoot defaulted on.
 - Apply WIM to blank/data/test partitions with BCDBoot defaulted off.
 - Apply WIM with the BCDBoot option manually enabled and disabled.
 - Apply WIM failure paths where DISM succeeds but boot configuration fails or is skipped.
 - Deploy WIM on UEFI/GPT systems.
+- Deploy WIM with the C: assignment option enabled (default) and cleared (automatic temporary Windows letter).
 - Deploy WIM on BIOS/MBR systems where supported by the target hardware.
 - Deploy WIM boot configuration and Windows RE population/registration.
 - Export WIM, including multi-index selection, replacement confirmation, and cancellation cleanup.
