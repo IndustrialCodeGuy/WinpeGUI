@@ -91,7 +91,7 @@
 
             Image? img = null;
 
-            string ext = Path.GetExtension(path)?.ToLowerInvariant();
+            string ext = Path.GetExtension(path)?.ToLowerInvariant() ?? string.Empty;
             if (ext == ".exe" || ext == ".dll" || ext == ".ico")
                 img = IconUtil.FromFileIconIndex(path, 0, size);
 

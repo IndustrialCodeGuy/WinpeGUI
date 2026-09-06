@@ -16,7 +16,7 @@ public static class ShellDialogChrome
 
     public const float HeaderFontSizeDelta = 1.5f;
 
-    public static Font DialogFont => SystemFonts.MessageBoxFont;
+    public static Font DialogFont => SystemFonts.MessageBoxFont ?? Control.DefaultFont;
     public static Padding ContentPadding => new(ContentMargin);
     public static Padding CompactContentPadding => new(CompactContentMargin);
 
