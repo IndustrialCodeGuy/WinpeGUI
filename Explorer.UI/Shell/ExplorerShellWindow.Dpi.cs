@@ -108,7 +108,7 @@ public partial class ExplorerShellWindow
 
     private sealed class TreeDpiPrepareHook : NativeWindow, IDisposable
     {
-        private const int WmDpiChangedBeforeParent = 0x02E2;
+        private const int WmDpiChangedBeforeParentMessage = 0x02E2;
 
         private readonly Control _control;
         private readonly Action _prepareTreeForDpiChange;
@@ -130,7 +130,7 @@ public partial class ExplorerShellWindow
 
         protected override void WndProc(ref Message m)
         {
-            bool isDpiBeforeParent = m.Msg == WmDpiChangedBeforeParent;
+            bool isDpiBeforeParent = m.Msg == WmDpiChangedBeforeParentMessage;
 
             if (isDpiBeforeParent)
                 _prepareTreeForDpiChange();

@@ -1,3 +1,5 @@
+#nullable enable
+
 namespace Explorer.UI.Shell;
 
 partial class ExplorerShellWindow

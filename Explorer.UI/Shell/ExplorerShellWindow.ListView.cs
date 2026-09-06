@@ -462,18 +462,26 @@ public partial class ExplorerShellWindow
             return;
         }
 
-        Color textColor = GetListSubItemTextColor(listView, e.Item, e.SubItem);
+        ListViewItem? item = e.Item;
+        ListViewItem.ListViewSubItem? subItem = e.SubItem;
+        if (item is null || subItem is null)
+        {
+            e.DrawDefault = true;
+            return;
+        }
 
-        DrawListSubItemBackground(listView, e);
+        Color textColor = GetListSubItemTextColor(listView, item, subItem);
+
+        DrawListSubItemBackground(listView, e, item);
 
         if (e.ColumnIndex == 0)
         {
-            DrawListItemImage(listView, e.Item, e.Graphics);
+            DrawListItemImage(listView, item, e.Graphics);
             DrawListSubItemText(
                 e.Graphics,
-                e.SubItem.Text,
-                e.Item.Font,
-                e.Item.GetBounds(ItemBoundsPortion.Label),
+                subItem.Text,
+                item.Font,
+                item.GetBounds(ItemBoundsPortion.Label),
                 textColor);
 
             e.DrawDefault = false;
@@ -488,20 +496,20 @@ public partial class ExplorerShellWindow
 
         DrawListSubItemText(
             e.Graphics,
-            e.SubItem.Text,
-            e.Item.Font,
+            subItem.Text,
+            item.Font,
             textBounds,
             textColor);
 
         e.DrawDefault = false;
     }
 
-    private void DrawListSubItemBackground(ListView listView, DrawListViewSubItemEventArgs e)
+    private void DrawListSubItemBackground(ListView listView, DrawListViewSubItemEventArgs e, ListViewItem item)
     {
-        bool isSelected = e.Item.Selected;
+        bool isSelected = item.Selected;
         bool isActiveSelection = isSelected && IsListSelectionActive(listView);
         bool isInactiveSelection = isSelected && !isActiveSelection;
-        bool isHover = !isSelected && ReferenceEquals(e.Item, _listHoverItem);
+        bool isHover = !isSelected && ReferenceEquals(item, _listHoverItem);
 
         Color backColor = isActiveSelection
             ? ShellTheme.ItemSelectedBack
@@ -513,7 +521,7 @@ public partial class ExplorerShellWindow
         e.Graphics.FillRectangle(backBrush, e.Bounds);
 
         if (isActiveSelection)
-            DrawSelectedListSubItemBorder(listView, e.Graphics, e.Bounds, e.Item, e.ColumnIndex);
+            DrawSelectedListSubItemBorder(listView, e.Graphics, e.Bounds, item, e.ColumnIndex);
     }
 
     private static void DrawSelectedListSubItemBorder(ListView listView, Graphics graphics, Rectangle bounds, ListViewItem item, int columnIndex)

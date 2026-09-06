@@ -53,7 +53,8 @@ public partial class ExplorerShellWindow
 
     private void ExtendedMouseButtons_ControlAdded(object? sender, ControlEventArgs e)
     {
-        HookExtendedMouseButtons(e.Control);
+        if (e.Control is Control control)
+            HookExtendedMouseButtons(control);
     }
 
     private void ExtendedMouseButtons_MouseUp(object? sender, MouseEventArgs e)
