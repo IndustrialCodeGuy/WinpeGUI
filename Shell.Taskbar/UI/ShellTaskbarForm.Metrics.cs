@@ -64,11 +64,11 @@
         #region Metrics / Scaling (fields)
 
         // ---------------- Fonts ----------------
-        private Font _taskButtonFont;
-        private Font _clockFont;
-        private Font _startMenuFont;
+        private Font _taskButtonFont = null!;
+        private Font _clockFont = null!;
+        private Font _startMenuFont = null!;
         private Font _startSubMenuFont = null!;
-        private Font _taskCtxGlyphFont;
+        private Font _taskCtxGlyphFont = null!;
 
         // Track the resolved pixel sizes that produced the current font objects.
         // ReapplyLayout() can run for display/work-area changes where the font

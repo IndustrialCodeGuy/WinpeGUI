@@ -433,13 +433,14 @@ namespace Shell.Taskbar.UI
         }
 
 
-        private void ShowStartMenuActionFailure(string commandText, Exception ex)
+        private void ShowStartMenuActionFailure(string? commandText, Exception ex)
         {
             Debug.WriteLine(ex);
 
+            string displayText = string.IsNullOrWhiteSpace(commandText) ? "command" : commandText;
             ShowProcessLaunchMessage(
                 "Unable to run command",
-                $"Unable to run:\n{commandText}\n\n{ex.Message}",
+                $"Unable to run:\n{displayText}\n\n{ex.Message}",
                 MessageBoxIcon.Error);
         }
 

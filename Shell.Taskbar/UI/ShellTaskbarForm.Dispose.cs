@@ -129,16 +129,16 @@ namespace Shell.Taskbar.UI
             if (disposing)
             {
                 try { _taskCtxGlyphFont?.Dispose(); } catch { }
-                _taskCtxGlyphFont = null;
+                _taskCtxGlyphFont = null!;
 
                 try { _taskButtonFont?.Dispose(); } catch { }
-                _taskButtonFont = null;
+                _taskButtonFont = null!;
 
                 try { _clockFont?.Dispose(); } catch { }
-                _clockFont = null;
+                _clockFont = null!;
 
                 try { _startMenuFont?.Dispose(); } catch { }
-                _startMenuFont = null;
+                _startMenuFont = null!;
 
                 try { _startSubMenuFont?.Dispose(); } catch { }
                 _startSubMenuFont = null!;

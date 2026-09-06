@@ -92,7 +92,7 @@ namespace Shell.Taskbar.UI
         private bool _refreshing;
 
         // ---------------- Drag/reorder ----------------
-        private BouncyTaskbarButton _dragBtn;
+        private BouncyTaskbarButton? _dragBtn;
         private Point _dragMouseDown;
         private bool _dragging;
 

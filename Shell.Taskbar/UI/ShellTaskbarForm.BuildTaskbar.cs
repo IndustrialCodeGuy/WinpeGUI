@@ -30,15 +30,15 @@
         #region Build Taskbar UI (fields)
 
         // Main surfaces
-        private Panel _taskbar;
-        private TableLayoutPanel _barLayout;
-        private TaskButtonsPanel _taskButtons;
-        private BouncyTaskbarButton _startButton;
+        private Panel _taskbar = null!;
+        private TableLayoutPanel _barLayout = null!;
+        private TaskButtonsPanel _taskButtons = null!;
+        private BouncyTaskbarButton _startButton = null!;
 
         // Clock surfaces
-        private Label _timeLabel;
-        private Label _dateLabel;
-        private Panel _clockPanel;
+        private Label _timeLabel = null!;
+        private Label _dateLabel = null!;
+        private Panel _clockPanel = null!;
 
         // Cached clock text/measurement (computed on startup + DPI changes)
         private string _lastClockTimeText = "";
@@ -157,13 +157,13 @@
             // Drag reorder support
             panel.DragEnter += (s, e) =>
             {
-                if (e.Data.GetDataPresent(typeof(BouncyTaskbarButton)))
+                if (e.Data?.GetDataPresent(typeof(BouncyTaskbarButton)) == true)
                     e.Effect = DragDropEffects.Move;
             };
 
             panel.DragOver += (s, e) =>
             {
-                if (!e.Data.GetDataPresent(typeof(BouncyTaskbarButton))) return;
+                if (e.Data?.GetDataPresent(typeof(BouncyTaskbarButton)) != true) return;
                 e.Effect = DragDropEffects.Move;
 
                 var btn = e.Data.GetData(typeof(BouncyTaskbarButton)) as BouncyTaskbarButton;
