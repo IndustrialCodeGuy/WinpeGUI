@@ -20,6 +20,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using ExplorerIconCache = Explorer.UI.Icons.ExplorerIconCache;
 using ShellDialogChrome = Shared.Shell.Utilities.ShellDialogChrome;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Explorer.Host;
 
@@ -723,7 +724,7 @@ internal sealed class ExplorerApplicationContext : ApplicationContext, IExplorer
     private static bool TryBuildOpenWithStartInfo(
         string targetPath,
         string commandLine,
-        out ProcessStartInfo? startInfo,
+        [NotNullWhen(true)] out ProcessStartInfo? startInfo,
         out string? errorMessage)
     {
         startInfo = null;
