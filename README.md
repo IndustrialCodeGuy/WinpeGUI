@@ -21,7 +21,7 @@ Windows and Windows PE are trademarks of the Microsoft group of companies. These
 - File and folder picker helper for scripts and external applications.
 - BitLocker volume status, unlock, lock, and management utilities.
 - Physical-disk FFU capture and apply operations.
-- WIM capture/append, clean partition apply, whole-disk deployment, export, mount/unmount, and offline driver injection.
+- WIM capture/append, clean partition apply, whole-disk deployment, image info/delete/split/export, SWM apply/deploy, mount/unmount, and offline driver injection.
 - BitLocker-aware imaging status, volume icons, and direct unlock integration.
 - Windows RE staging support when capturing an installed Windows partition to WIM.
 - Imaging Manager integration in the Start menu when `Imaging.Manager.exe` is deployed alongside the shell.
@@ -116,12 +116,14 @@ Features whose supporting WinPE components are absent may be unavailable or fail
 
 ## Imaging Manager
 
-Imaging Manager is a companion application for physical-disk, partition, and WIM-file operations from WinPE. The main view uses a Disk Management-style layout: each physical disk has its own compact disk selector showing size and online/offline state beside a proportional partition strip, followed by read-only optical-media and mounted-WIM strips when applicable. Only one disk, partition, optical volume, or mounted WIM owns the active selection at a time.
+Imaging Manager is a companion application for physical-disk, partition, and WIM-file operations from WinPE. The main view uses a Disk Management-style layout: each physical disk has its own compact disk selector showing size and online/offline state beside a proportional partition strip, followed by a read-only optical-media row when optical media is mounted and a mounted-WIM status row. Only one disk, partition, optical volume, or mounted WIM owns the active selection at a time.
 
-The main command layout is split into two full-width strips:
+The main command layout separates global image-management operations from actions against the selected strip item:
 
-- A **global command strip** above the disks contains **Mount WIM** and **Export WIM** on the left, with **Refresh** pinned to the right. **Cleanup Mounts** remains visible on the left as a system-wide recovery action and is enabled only when DISM reports one or more **Invalid** mounted WIMs. These commands do not depend on the active disk/partition/optical/WIM selection and leave room for additional global actions later.
-- A **contextual command strip** below the disk/WIM selector shows the current target on the left and only the actions that apply to that selection on the right.
+- A themed **menu bar** provides global commands that do not depend on the current disk/partition/optical/WIM selection. **Images** contains Image Info, Mount WIM, Export WIM, Delete WIM Image, and Split WIM; **Mounts** contains Cleanup Mounts; and **View** contains Refresh (`F5`). Cleanup Mounts is enabled only when DISM reports one or more **Invalid** mounted WIMs.
+- A **contextual command strip** below the disk/WIM selector shows the current target on the left and only the actions that apply to that selection on the right. Right-clicking a selectable strip item opens the same contextual action set, using the same enabled/visible state as the buttons.
+
+Imaging Manager starts with no strip item selected. Selection clears on neutral/background clicks, `Esc`, or menu activation, but ordinary application focus changes and item-specific dialogs do not discard the current selection.
 
 The contextual actions are:
 
@@ -189,7 +191,7 @@ If the selected destination WIM does not exist, a new WIM is created.
 
 If the destination WIM already exists, Imaging Manager offers:
 
-- **Replace** — delete the existing WIM and create a new image starting at index 1.
+- **Replace** — capture to a temporary sibling WIM first, then replace the existing destination only after the new capture succeeds.
 - **Append** — preserve the existing WIM and add the new capture as another image index using DISM `/Append-Image`.
 - **Cancel**.
 
@@ -224,9 +226,9 @@ Apply WIM uses DISM `/Apply-Image` against the currently selected partition.
 
 After a WIM is selected, Imaging Manager reads its image information and allows the desired image/index to be selected before applying it.
 
-Before DISM starts, the selected target volume is quick-formatted as NTFS. The format is directed at the exact active drive letter and verified with a temporary marker file. If the marker survives the format, Imaging Manager treats the format as failed and does not start DISM. This prevents an unsuccessful format from silently turning into an apply over an existing Windows tree.
+Before DISM starts, Imaging Manager detects the selected target volume's current supported filesystem and quick-formats the volume using that same filesystem. The format is directed at the exact active drive letter and verified with a temporary marker file. If the marker survives the format, Imaging Manager treats the format as failed and does not start DISM. This prevents an unsuccessful format from silently turning into an apply over an existing filesystem tree.
 
-Apply WIM remains partition-scoped. It does not repartition the disk or intentionally modify neighboring partitions as part of the restore.
+Apply WIM remains partition-scoped and does not repartition the disk or alter neighboring partition layouts. If **Configure Windows boot files after apply (BCDBoot)** is enabled, the boot-configuration stage can write boot files to the existing system partition on the same target disk; it does not create or resize that partition.
 
 The confirmation dialog includes **Configure Windows boot files after apply (BCDBoot)**. The option defaults on only when the pre-format target contains a recognizable Windows installation at:
 
@@ -238,7 +240,7 @@ Blank, data, and test partitions therefore default to leaving the machine boot c
 
 The same confirmation dialog also includes **Assign the target partition to C: before applying the image**. It is on by default. When selected, Imaging Manager makes C: available, reassigns the chosen target to C:, and rebases the source WIM path if the displaced C: volume contains that WIM. Clearing the option preserves the target partition's current WinPE drive letter (or uses the normal temporary-letter path for an unlettered partition). No drive-letter normalization is performed at WinPEGUI startup.
 
-When boot configuration is requested and the successfully applied image contains a Windows directory, Imaging Manager runs BCDBoot against the restored Windows installation. Regular Apply WIM does not hard-code a system-partition drive letter; BCDBoot is allowed to use the existing firmware/system-partition configuration. If boot configuration is requested but the applied image does not contain Windows, the image apply itself succeeds and Imaging Manager reports that the BCDBoot step was skipped.
+When boot configuration is requested and the successfully applied image contains a Windows directory, Imaging Manager locates the appropriate system partition on the **same target disk**, temporarily assigns it a drive letter when necessary, and runs BCDBoot with an explicit `/s` target and matching `/f UEFI` or `/f BIOS`. It does not silently fall back to a system partition on another disk. If boot configuration is requested but the applied image does not contain Windows or the selected disk has no recognizable system partition, Imaging Manager reports the boot-configuration failure without redirecting BCDBoot elsewhere.
 
 ### Deploy WIM
 
@@ -248,16 +250,16 @@ Deploy WIM detects whether WinPE was booted in UEFI or BIOS mode and creates a m
 
 For UEFI systems, the deployment workflow creates a GPT layout containing:
 
-- EFI System partition.
+- 300 MB EFI System partition.
 - Microsoft Reserved (MSR) partition.
 - Windows partition.
-- Windows Recovery partition.
+- 1024 MB Windows Recovery partition.
 
 For BIOS systems, the deployment workflow creates an MBR layout containing:
 
-- Active System partition.
+- 300 MB active System partition.
 - Windows partition.
-- Windows Recovery partition.
+- 1024 MB Windows Recovery partition.
 
 The Deploy confirmation dialog includes **Assign the deployed Windows partition to C: in WinPE**. It remains enabled by default to preserve the established deployment behavior. If cleared, Imaging Manager reserves an unused temporary drive letter for the new Windows partition and carries that letter consistently through DISM, BCDBoot, and Windows RE configuration; existing C: is left untouched.
 
@@ -278,7 +280,13 @@ Export WIM is a file-to-file operation and does not require a disk or partition 
 
 Imaging Manager reads the source WIM indexes, lets the desired image be selected, then exports it to a separate WIM using DISM `/Export-Image /Compress:max /CheckIntegrity`.
 
-An existing destination requires explicit replacement confirmation. The source and destination cannot be the same file. A failed or canceled export removes the partial destination WIM rather than leaving an incomplete image behind.
+An existing destination requires explicit replacement confirmation. The source and destination cannot be the same file. Replacement exports are written to a temporary sibling WIM and committed only after DISM succeeds, so a failed or canceled export leaves the previous destination intact.
+
+### Image Info, Delete Image, and Split WIM
+
+The global **Images** menu also exposes file-oriented WIM management without requiring a strip selection. **Image Info** runs DISM `/Get-ImageInfo` for supported image files and displays the returned metadata. **Delete WIM Image** selects an image index and removes that index with DISM `/Delete-Image`; deleting an index does not itself compact/reclaim all unused WIM resource data.
+
+**Split WIM** uses DISM `/Split-Image` and defaults to 3800 MB parts for FAT32-friendly deployment media. Existing SWM sets are replaced transactionally: the new split family is produced separately and the old family is preserved/rolled back if the final swap cannot complete. Apply WIM and Deploy WIM accept `.swm` input, resolve numbered parts back to the primary `.swm`, verify that the numbered family is complete, and reject similarly named stray SWM files before passing DISM the required wildcard.
 
 ### Mount WIM
 
@@ -298,7 +306,7 @@ Once DISM begins the mount, the operation is intentionally not exposed as cancel
 
 The mounted-WIM strip is populated from DISM's current mounted-image inventory, so it can recognize WIMs mounted before Imaging Manager was started or mounted by another process. Imaging Manager also retains DISM's mounted-image **Status** value and uses it to expose the appropriate contextual recovery action. No second WIM-selection dialog is used.
 
-Healthy mounted WIMs show the normal **Unmount WIM** and **Add Drivers** actions. A read-only healthy mount keeps **Add Drivers** visible but disabled. If DISM reports **Needs Remount**, the normal servicing actions are replaced with **Remount WIM**, which runs DISM `/Remount-Image /MountDir:<mount-directory>`. If DISM reports **Invalid**, the selected tile retains only **Get Info** while the global top strip exposes **Cleanup Mounts**. Abnormal statuses are appended to the mounted-WIM tile so they are visible without opening Get Info.
+Healthy mounted WIMs show the normal **Unmount WIM** and **Add Drivers** actions. A read-only healthy mount keeps **Add Drivers** visible but disabled. If DISM reports **Needs Remount**, the normal servicing actions are replaced with **Remount WIM**, which runs DISM `/Remount-Image /MountDir:<mount-directory>`. If DISM reports **Invalid**, the selected tile retains only **Get Info** while the global **Mounts** menu exposes **Cleanup Mounts**. Abnormal statuses are appended to the mounted-WIM tile so they are visible without opening Get Info.
 
 The unmount dialog offers:
 
@@ -316,7 +324,7 @@ Read-only mounts can be discarded but cannot be committed.
 
 A mounted WIM reported by DISM as **Needs Remount** can be recovered with **Remount WIM**. This uses DISM `/Remount-Image` against the selected mount directory and refreshes the mounted-image inventory afterward.
 
-**Cleanup Mounts** remains visible in the global top strip and is enabled when DISM reports one or more mounted WIMs as **Invalid**. DISM `/Cleanup-Mountpoints` is system-wide rather than scoped to a single selected mount: it removes resources associated with corrupted mounted images, while leaving healthy mounts in place and not deleting mounts that DISM considers recoverable with `/Remount-Image`. Imaging Manager therefore refreshes the mounted-image inventory before running cleanup, requires an explicit warning/confirmation, and refreshes the inventory again afterward.
+**Cleanup Mounts** remains visible in the global **Mounts** menu and is enabled when DISM reports one or more mounted WIMs as **Invalid**. DISM `/Cleanup-Mountpoints` is system-wide rather than scoped to a single selected mount: it removes resources associated with corrupted mounted images, while leaving healthy mounts in place and not deleting mounts that DISM considers recoverable with `/Remount-Image`. Imaging Manager therefore refreshes the mounted-image inventory before running cleanup, requires an explicit warning/confirmation, and refreshes the inventory again afterward.
 
 ### Add Drivers
 
@@ -352,8 +360,11 @@ Current imaging safeguards include:
 - Apply WIM configures boot files only when the user-selected BCDBoot option is enabled.
 - Apply/Deploy WIM change the target to C: only when their confirmation-dialog option requests it; WinPEGUI does not globally normalize drive letters.
 - Deploy WIM requires explicit whole-disk targeting and recreates the target partition layout.
-- Export WIM prevents using the same file as both source and destination and removes incomplete output after failure/cancellation.
+- Capture WIM replacement, Capture FFU replacement, Export WIM replacement, and Split WIM replacement preserve the existing destination until the new output has completed successfully.
+- Export WIM prevents using the same file as both source and destination.
 - Imaging Manager avoids deleting an existing WIM if an append operation fails or is canceled.
+- Apply WIM targets BCDBoot at the system partition on the selected disk rather than allowing another disk to be selected implicitly.
+- Pre-destructive C: reassignment attempts are rolled back when preparation fails; temporary deployment/system/recovery drive letters are cleaned up after use.
 - Temporary source/target/Recovery drive-letter cleanup failures are surfaced to the user.
 - Temporarily staged WinRE files are removed after WIM capture when Imaging Manager added them.
 - Mounted-WIM servicing does not force unsigned drivers.
@@ -596,7 +607,7 @@ Important scenarios include:
 - Imaging Manager physical-disk and partition enumeration.
 - Disk Management-style multi-disk rows, online/offline disk status, proportional partition sizing, partition used-space display, compact disk/partition icons, and four-disk-plus-mounted-WIM default-height layout.
 - Disk, partition, and mounted-WIM selection exclusivity plus Get Info behavior.
-- Full-width global command strip with Refresh pinned right and selection-driven contextual command strip.
+- Themed Images / Mounts / View menu bar, F5 refresh, no-selection startup, contextual command strip, and matching right-click strip-item menus.
 - FFU capture to a different physical disk.
 - FFU apply and destructive-target confirmation.
 - FFU capture warnings for encrypted, partially encrypted, and BitLocker-status-unknown disks.
@@ -606,12 +617,12 @@ Important scenarios include:
 - Windows-partition WIM capture with WinRE temporarily staged from the configured Recovery partition.
 - WinRE staging failure and cleanup-warning paths.
 - New Capture WIM `/Compress:max` behavior.
-- WIM replace and append-to-existing-WIM behavior.
-- Multi-index WIM enumeration and image selection.
+- WIM replace and append-to-existing-WIM behavior, including transactional replace failure/cancellation preserving the previous WIM.
+- Multi-index WIM enumeration and image selection, plus Image Info, Delete WIM Image, Split WIM, and SWM apply/deploy.
 - Imaging Manager live refresh after drive insertion/removal and external BitLocker lock-state changes, including refreshes while an imaging operation is active.
 - Apply WIM target quick-format and marker verification.
 - Apply WIM with **Assign target to C:** both cleared and selected, including a case where C: is already occupied by another volume.
-- Apply WIM to an existing Windows partition with BCDBoot defaulted on.
+- Apply WIM to an existing Windows partition with BCDBoot defaulted on and explicitly targeting the selected disk's EFI/active system partition.
 - Apply WIM to blank/data/test partitions with BCDBoot defaulted off.
 - Apply WIM with the BCDBoot option manually enabled and disabled.
 - Apply WIM failure paths where DISM succeeds but boot configuration fails or is skipped.
