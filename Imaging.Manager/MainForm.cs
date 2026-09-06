@@ -38,17 +38,17 @@ public partial class MainForm : Form
     private Panel? _mountedWimRow;
     private FlowLayoutPanel? _pnlMountedWims;
     private Label _lblStatus = null!;
-    private Button _btnCapture = null!;
-    private Button _btnApply = null!;
-    private Button _btnUnmountWim = null!;
-    private Button _btnRemountWim = null!;
-    private Button _btnCaptureWim = null!;
-    private Button _btnApplyWim = null!;
-    private Button _btnAddDrivers = null!;
-    private Button _btnUnlock = null!;
-    private Button _btnDeployWim = null!;
-    private Button _btnGetInfo = null!;
-    private readonly Dictionary<Button, Func<Task>> _actionButtonActions = new();
+    private IReadOnlyList<ContextAction> _contextActions = Array.Empty<ContextAction>();
+    private ContextAction _actionGetInfo = null!;
+    private ContextAction _actionCaptureFfu = null!;
+    private ContextAction _actionApplyFfu = null!;
+    private ContextAction _actionDeployWim = null!;
+    private ContextAction _actionCaptureWim = null!;
+    private ContextAction _actionApplyWim = null!;
+    private ContextAction _actionUnmountWim = null!;
+    private ContextAction _actionRemountWim = null!;
+    private ContextAction _actionAddDrivers = null!;
+    private ContextAction _actionUnlock = null!;
 
     private Panel? _selectedDiskTile;
     private Panel? _selectedPartitionTile;
@@ -86,7 +86,7 @@ public partial class MainForm : Form
     public MainForm()
     {
         _driveLetterReassignment = new DriveLetterReassignmentService(_temporaryDriveLetters);
-        _wimDeployment = new WimDeploymentService(_wimBackend);
+        _wimDeployment = new WimDeploymentService(_wimBackend, _temporaryDriveLetters);
         _winReStaging = new WinReStagingService(_temporaryDriveLetters);
 
         AutoScaleMode = AutoScaleMode.None;

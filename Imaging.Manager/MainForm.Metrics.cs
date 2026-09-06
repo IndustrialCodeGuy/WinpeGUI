@@ -63,16 +63,8 @@ public partial class MainForm
         if (_rightPanel is not null) _rightPanel.Font = _chromeFont;
         if (_pnlContextActions is not null) _pnlContextActions.Font = _chromeFont;
         if (_lblSelectionContext is not null) _lblSelectionContext.Font = _chromeFont;
-        if (_btnCapture is not null) _btnCapture.Font = _chromeFont;
-        if (_btnApply is not null) _btnApply.Font = _chromeFont;
-        if (_btnUnmountWim is not null) _btnUnmountWim.Font = _chromeFont;
-        if (_btnRemountWim is not null) _btnRemountWim.Font = _chromeFont;
-        if (_btnCaptureWim is not null) _btnCaptureWim.Font = _chromeFont;
-        if (_btnApplyWim is not null) _btnApplyWim.Font = _chromeFont;
-        if (_btnAddDrivers is not null) _btnAddDrivers.Font = _chromeFont;
-        if (_btnUnlock is not null) _btnUnlock.Font = _chromeFont;
-        if (_btnDeployWim is not null) _btnDeployWim.Font = _chromeFont;
-        if (_btnGetInfo is not null) _btnGetInfo.Font = _chromeFont;
+        foreach (ContextAction action in _contextActions)
+            action.Button.Font = _chromeFont;
         if (_lblStatus is not null) _lblStatus.Font = _chromeFont;
         ApplyMainMenuAppearance();
         ApplyChromeFontToChildren(_pnlDisks, _chromeFont);

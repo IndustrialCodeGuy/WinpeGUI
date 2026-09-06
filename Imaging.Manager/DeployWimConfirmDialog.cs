@@ -20,8 +20,8 @@ internal sealed class DeployWimConfirmDialog : ImagingConfirmationDialogBase
             ? "UEFI / GPT"
             : "BIOS / MBR";
         string layoutText = firmwareType == WimDeploymentFirmwareType.Uefi
-            ? "260 MB EFI · 16 MB MSR · Windows · 900 MB Recovery"
-            : "100 MB System · Windows · 750 MB Recovery";
+            ? $"{WimDeploymentService.SystemPartitionSizeMb} MB EFI · 16 MB MSR · Windows · {WimDeploymentService.RecoveryPartitionSizeMb} MB Recovery"
+            : $"{WimDeploymentService.SystemPartitionSizeMb} MB System · Windows · {WimDeploymentService.RecoveryPartitionSizeMb} MB Recovery";
 
         AddHeader($"Deploy WIM to Disk {disk.DiskNumber}?");
 
