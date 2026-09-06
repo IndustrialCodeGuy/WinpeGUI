@@ -24,17 +24,13 @@ internal sealed class ExplorerImageListManager
         _iconCache = iconCache;
         _iconPolicy = new ExplorerIconPolicy(fileAssociations);
 
-        TreeImages = new ImageList(container)
-        {
-            ColorDepth = ColorDepth.Depth32Bit,
-            ImageSize = smallImageSize
-        };
+        TreeImages = container is null ? new ImageList() : new ImageList(container);
+        TreeImages.ColorDepth = ColorDepth.Depth32Bit;
+        TreeImages.ImageSize = smallImageSize;
 
-        SmallImages = new ImageList(container)
-        {
-            ColorDepth = ColorDepth.Depth32Bit,
-            ImageSize = smallImageSize
-        };
+        SmallImages = container is null ? new ImageList() : new ImageList(container);
+        SmallImages.ColorDepth = ColorDepth.Depth32Bit;
+        SmallImages.ImageSize = smallImageSize;
     }
 
     public ImageList TreeImages { get; }
