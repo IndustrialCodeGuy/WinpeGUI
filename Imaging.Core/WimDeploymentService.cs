@@ -96,7 +96,7 @@ public sealed class WimDeploymentService
         ArgumentNullException.ThrowIfNull(image);
 
         if (!File.Exists(imagePath))
-            throw new FileNotFoundException("The WIM file was not found.", imagePath);
+            throw new FileNotFoundException("The WIM or split WIM file was not found.", imagePath);
         if (firmwareType is not (WimDeploymentFirmwareType.Bios or WimDeploymentFirmwareType.Uefi))
             throw new InvalidOperationException("The current firmware mode could not be determined as BIOS or UEFI.");
 

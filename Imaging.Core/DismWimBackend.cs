@@ -88,17 +88,24 @@ public sealed class DismWimBackend
             throw new ArgumentOutOfRangeException(nameof(imageIndex), "The WIM image index must be greater than zero.");
         if (!Directory.Exists(applyRoot))
             throw new DirectoryNotFoundException($"The apply target is not accessible: {applyRoot}");
-        if (!File.Exists(imageFile))
-            throw new FileNotFoundException("The WIM file was not found.", imageFile);
 
-        string[] arguments =
+        string imageFullPath = ResolvePrimaryImageFile(imageFile);
+        if (!File.Exists(imageFullPath))
+            throw new FileNotFoundException("The WIM or split WIM file was not found.", imageFullPath);
+
+        List<string> arguments = new()
         {
             "/Apply-Image",
-            $"/ImageFile:{imageFile}",
-            $"/Index:{imageIndex}",
-            $"/ApplyDir:{applyRoot}",
-            "/CheckIntegrity"
+            $"/ImageFile:{imageFullPath}"
         };
+
+        string? splitPattern = GetSplitImagePattern(imageFullPath);
+        if (!string.IsNullOrWhiteSpace(splitPattern))
+            arguments.Add($"/SWMFile:{splitPattern}");
+
+        arguments.Add($"/Index:{imageIndex}");
+        arguments.Add($"/ApplyDir:{applyRoot}");
+        arguments.Add("/CheckIntegrity");
 
         return RunAsync(arguments, progress, cancellationToken);
     }
@@ -253,6 +260,124 @@ public sealed class DismWimBackend
         };
     }
 
+
+    public Task<WimOperationResult> DeleteImageAsync(
+        string imageFile,
+        int imageIndex,
+        IProgress<WimOperationProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(imageFile);
+        if (imageIndex <= 0)
+            throw new ArgumentOutOfRangeException(nameof(imageIndex), "The WIM image index must be greater than zero.");
+
+        string imageFullPath = Path.GetFullPath(imageFile);
+        if (!File.Exists(imageFullPath))
+            throw new FileNotFoundException("The WIM file was not found.", imageFullPath);
+        if (!Path.GetExtension(imageFullPath).Equals(".wim", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Delete Image is supported only for WIM files.");
+
+        string[] arguments =
+        {
+            "/Delete-Image",
+            $"/ImageFile:{imageFullPath}",
+            $"/Index:{imageIndex}",
+            "/CheckIntegrity"
+        };
+
+        return RunAsync(arguments, progress, cancellationToken);
+    }
+
+    public Task<WimOperationResult> SplitAsync(
+        string imageFile,
+        string swmFile,
+        int fileSizeMb,
+        IProgress<WimOperationProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(imageFile);
+        ArgumentException.ThrowIfNullOrWhiteSpace(swmFile);
+        if (fileSizeMb <= 0)
+            throw new ArgumentOutOfRangeException(nameof(fileSizeMb), "The split file size must be greater than zero.");
+
+        string imageFullPath = Path.GetFullPath(imageFile);
+        string swmFullPath = Path.GetFullPath(swmFile);
+        if (!File.Exists(imageFullPath))
+            throw new FileNotFoundException("The WIM file was not found.", imageFullPath);
+        if (!Path.GetExtension(imageFullPath).Equals(".wim", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Split Image requires a WIM source file.");
+        if (!Path.GetExtension(swmFullPath).Equals(".swm", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The split image destination must use the .swm extension.");
+
+        string? destinationDirectory = Path.GetDirectoryName(swmFullPath);
+        if (string.IsNullOrWhiteSpace(destinationDirectory) || !Directory.Exists(destinationDirectory))
+            throw new DirectoryNotFoundException($"The split image destination folder is not accessible: {destinationDirectory}");
+
+        string[] arguments =
+        {
+            "/Split-Image",
+            $"/ImageFile:{imageFullPath}",
+            $"/SWMFile:{swmFullPath}",
+            $"/FileSize:{fileSizeMb.ToString(CultureInfo.InvariantCulture)}",
+            "/CheckIntegrity"
+        };
+
+        return RunAsync(arguments, progress, cancellationToken);
+    }
+
+    public Task<WimOperationResult> GetImageInfoAsync(
+        string imageFile,
+        int? imageIndex,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(imageFile);
+        string imageFullPath = ResolvePrimaryImageFile(imageFile);
+        if (!File.Exists(imageFullPath))
+            throw new FileNotFoundException("The image file was not found.", imageFullPath);
+        if (imageIndex.HasValue && imageIndex.Value <= 0)
+            throw new ArgumentOutOfRangeException(nameof(imageIndex), "The image index must be greater than zero when specified.");
+
+        List<string> arguments = new()
+        {
+            "/Get-ImageInfo",
+            $"/ImageFile:{imageFullPath}"
+        };
+        if (imageIndex.HasValue)
+            arguments.Add($"/Index:{imageIndex.Value}");
+        arguments.Add("/English");
+
+        return RunAsync(arguments, progress: null, cancellationToken);
+    }
+
+    public static string ResolvePrimaryImageFile(string imageFile)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(imageFile);
+        string fullPath = Path.GetFullPath(imageFile);
+        if (!Path.GetExtension(fullPath).Equals(".swm", StringComparison.OrdinalIgnoreCase))
+            return fullPath;
+
+        string directory = Path.GetDirectoryName(fullPath) ?? string.Empty;
+        string stem = Path.GetFileNameWithoutExtension(fullPath);
+        Match numberedPart = Regex.Match(stem, @"^(?<base>.+?)(?<part>[2-9][0-9]*)$", RegexOptions.CultureInvariant);
+        if (!numberedPart.Success)
+            return fullPath;
+
+        string candidate = Path.Combine(directory, numberedPart.Groups["base"].Value + ".swm");
+        return File.Exists(candidate) ? candidate : fullPath;
+    }
+
+    public static string? GetSplitImagePattern(string imageFile)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(imageFile);
+        string primary = ResolvePrimaryImageFile(imageFile);
+        if (!Path.GetExtension(primary).Equals(".swm", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        string directory = Path.GetDirectoryName(primary) ?? string.Empty;
+        string stem = Path.GetFileNameWithoutExtension(primary);
+        return Path.Combine(directory, stem + "*.swm");
+    }
+
     public Task<WimOperationResult> ExportAsync(
         string sourceImageFile,
         int sourceImageIndex,
@@ -293,14 +418,15 @@ public sealed class DismWimBackend
     public async Task<WimImageInfoResult> GetImagesAsync(string imageFile, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(imageFile);
-        if (!File.Exists(imageFile))
-            throw new FileNotFoundException("The WIM file was not found.", imageFile);
+        string imageFullPath = ResolvePrimaryImageFile(imageFile);
+        if (!File.Exists(imageFullPath))
+            throw new FileNotFoundException("The image file was not found.", imageFullPath);
 
         WimOperationResult result = await RunAsync(
             new[]
             {
                 "/Get-ImageInfo",
-                $"/ImageFile:{imageFile}",
+                $"/ImageFile:{imageFullPath}",
                 "/English"
             },
             progress: null,
