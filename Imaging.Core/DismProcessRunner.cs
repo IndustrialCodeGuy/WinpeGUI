@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -97,7 +97,11 @@ internal static class DismProcessRunner
         lock (sync)
             finalOutput = output.ToString().Trim();
 
-        return canceled || cancellationToken.IsCancellationRequested
+        // If DISM exited normally, honor its exit code even if the user clicked
+        // Cancel in the tiny race after process completion. Treat the operation
+        // as canceled only when cancellation actually interrupted the wait and
+        // we terminated the DISM process.
+        return canceled
             ? new DismProcessResult(true, -1, finalOutput)
             : new DismProcessResult(false, process.ExitCode, finalOutput);
     }

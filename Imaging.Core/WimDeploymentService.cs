@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Imaging.Core;
@@ -579,8 +579,7 @@ public sealed class WimDeploymentService
         List<string> errors = new();
         foreach (var (letter, partitionNumber) in assignments)
         {
-            string root = $"{letter}:\\";
-            if (!Directory.Exists(root))
+            if (!IsDriveLetterPresent(letter))
                 continue;
 
             ProcessExecutionResult result;
@@ -599,10 +598,10 @@ public sealed class WimDeploymentService
                 continue;
             }
 
-            for (int attempt = 0; attempt < 10 && Directory.Exists(root); attempt++)
+            for (int attempt = 0; attempt < 10 && IsDriveLetterPresent(letter); attempt++)
                 await Task.Delay(100, CancellationToken.None).ConfigureAwait(false);
 
-            if (!result.Success || Directory.Exists(root))
+            if (!result.Success || IsDriveLetterPresent(letter))
             {
                 string detail = string.IsNullOrWhiteSpace(result.CombinedOutput)
                     ? $"DiskPart exited with code {result.ExitCode}."
@@ -614,6 +613,15 @@ public sealed class WimDeploymentService
         return errors.Count == 0
             ? null
             : string.Join(Environment.NewLine + Environment.NewLine, errors);
+    }
+
+    private static bool IsDriveLetterPresent(char letter)
+    {
+        char normalized = char.ToUpperInvariant(letter);
+        return Directory.GetLogicalDrives().Any(root =>
+            root.Length >= 2 &&
+            char.ToUpperInvariant(root[0]) == normalized &&
+            root[1] == ':');
     }
 
     private static bool TryValidateWindowsReLocation(

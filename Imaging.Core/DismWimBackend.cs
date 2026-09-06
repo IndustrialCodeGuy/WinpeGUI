@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace Imaging.Core;
@@ -358,12 +358,26 @@ public sealed class DismWimBackend
 
         string directory = Path.GetDirectoryName(fullPath) ?? string.Empty;
         string stem = Path.GetFileNameWithoutExtension(fullPath);
-        Match numberedPart = Regex.Match(stem, @"^(?<base>.+?)(?<part>[2-9][0-9]*)$", RegexOptions.CultureInvariant);
-        if (!numberedPart.Success)
-            return fullPath;
 
-        string candidate = Path.Combine(directory, numberedPart.Groups["base"].Value + ".swm");
-        return File.Exists(candidate) ? candidate : fullPath;
+        // A split set is named base.swm, base2.swm, base3.swm, ... . Walk
+        // possible numeric suffixes from right to left so a family whose base
+        // itself ends in digits (for example Win11.swm -> Win112.swm) resolves
+        // to the longest existing primary name instead of an unrelated shorter
+        // family in the same directory.
+        for (int suffixStart = stem.Length - 1; suffixStart > 0; suffixStart--)
+        {
+            string suffix = stem[suffixStart..];
+            if (!int.TryParse(suffix, NumberStyles.None, CultureInfo.InvariantCulture, out int partNumber) || partNumber < 2)
+                continue;
+            if (!suffix.Equals(partNumber.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal))
+                continue;
+
+            string candidate = Path.Combine(directory, stem[..suffixStart] + ".swm");
+            if (File.Exists(candidate))
+                return candidate;
+        }
+
+        return fullPath;
     }
 
     public static string? GetSplitImagePattern(string imageFile)
@@ -373,9 +387,68 @@ public sealed class DismWimBackend
         if (!Path.GetExtension(primary).Equals(".swm", StringComparison.OrdinalIgnoreCase))
             return null;
 
+        ValidateSplitImageFamily(primary);
+
         string directory = Path.GetDirectoryName(primary) ?? string.Empty;
         string stem = Path.GetFileNameWithoutExtension(primary);
         return Path.Combine(directory, stem + "*.swm");
+    }
+
+    private static void ValidateSplitImageFamily(string primaryImageFile)
+    {
+        string primary = Path.GetFullPath(primaryImageFile);
+        if (!File.Exists(primary))
+            throw new FileNotFoundException("The primary split WIM file was not found.", primary);
+
+        string directory = Path.GetDirectoryName(primary) ?? string.Empty;
+        string stem = Path.GetFileNameWithoutExtension(primary);
+        List<int> parts = new();
+        List<string> unexpectedMatches = new();
+
+        foreach (string file in Directory.EnumerateFiles(directory, stem + "*.swm", SearchOption.TopDirectoryOnly))
+        {
+            string candidateStem = Path.GetFileNameWithoutExtension(file);
+            if (candidateStem.Equals(stem, StringComparison.OrdinalIgnoreCase))
+            {
+                parts.Add(1);
+                continue;
+            }
+
+            if (!candidateStem.StartsWith(stem, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            string suffix = candidateStem[stem.Length..];
+            if (int.TryParse(suffix, NumberStyles.None, CultureInfo.InvariantCulture, out int partNumber) &&
+                partNumber >= 2 &&
+                suffix.Equals(partNumber.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal))
+            {
+                parts.Add(partNumber);
+                continue;
+            }
+
+            unexpectedMatches.Add(file);
+        }
+
+        if (unexpectedMatches.Count > 0)
+        {
+            throw new InvalidOperationException(
+                "The split WIM folder contains similarly named SWM files that do not belong to the numbered image set. " +
+                "Move or rename these files before applying the split image so DISM's SWM wildcard cannot include them.\n\n" +
+                string.Join(Environment.NewLine, unexpectedMatches.Select(Path.GetFileName)));
+        }
+
+        int[] orderedParts = parts.Distinct().OrderBy(static part => part).ToArray();
+        if (orderedParts.Length == 0 || orderedParts[0] != 1)
+            throw new InvalidOperationException("The split WIM set does not contain its primary .swm file.");
+
+        for (int expected = 1; expected <= orderedParts[^1]; expected++)
+        {
+            if (Array.BinarySearch(orderedParts, expected) >= 0)
+                continue;
+
+            throw new InvalidOperationException(
+                $"The split WIM set is incomplete. Part {expected.ToString(CultureInfo.InvariantCulture)} is missing.");
+        }
     }
 
     public Task<WimOperationResult> ExportAsync(
