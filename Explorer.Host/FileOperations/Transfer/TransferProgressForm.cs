@@ -411,6 +411,9 @@ internal sealed class TransferProgressForm : Form, IExplorerTransferProgressSink
         string destinationPath,
         TaskCompletionSource<ExplorerTransferConflictDecision> tcs)
     {
+        sourcePath ??= string.Empty;
+        destinationPath ??= string.Empty;
+
         DisposeCompareView();
         ClearErrorDetails();
 
@@ -425,9 +428,9 @@ internal sealed class TransferProgressForm : Form, IExplorerTransferProgressSink
         SetMainLayoutVisible(true);
 
         Text = _windowTitle;
-        _lblOperation.Text = BuildConflictStatusText(sourcePath);
+        _lblOperation.Text = BuildConflictStatusText(sourcePath ?? string.Empty);
         _lblDetail.Text = string.Empty;
-        string pathToolTip = BuildTransferPathToolTip(sourcePath, destinationPath);
+        string pathToolTip = BuildTransferPathToolTip(sourcePath ?? string.Empty, destinationPath ?? string.Empty);
         _pathToolTip.SetToolTip(_lblOperation, pathToolTip);
         _pathToolTip.SetToolTip(_lblDetail, string.Empty);
         _pathToolTip.SetToolTip(_lblStatus, string.Empty);
@@ -461,6 +464,9 @@ internal sealed class TransferProgressForm : Form, IExplorerTransferProgressSink
         bool allowSkip,
         TaskCompletionSource<ExplorerTransferErrorAction> tcs)
     {
+        sourcePath ??= string.Empty;
+        destinationPath ??= string.Empty;
+
         DisposeCompareView();
 
         _pendingConflictDecision = null;
@@ -769,6 +775,8 @@ internal sealed class TransferProgressForm : Form, IExplorerTransferProgressSink
 
     private void ApplyErrorDetails(string path, bool isDirectory)
     {
+        path ??= string.Empty;
+
         _errorDetailsActive = true;
         _errorDetailsIsDirectory = isDirectory;
         SetErrorDetailsVisible(true);
@@ -784,26 +792,27 @@ internal sealed class TransferProgressForm : Form, IExplorerTransferProgressSink
             _lblErrorType.Visible = false;
             _lblErrorSize.Visible = false;
 
-            _lblErrorModified.Text = "Date Created: " + FileOperationText.GetDateCreatedText(path);
+            _lblErrorModified.Text = "Date Created: " + FileOperationText.GetDateCreatedText(path ?? string.Empty);
             _lblErrorModified.Visible = true;
         }
         else
         {
-            _lblErrorType.Text = "Type: " + GetFileTypeText(path);
-            _lblErrorSize.Text = "Size: " + FileOperationText.GetSizeText(path);
-            _lblErrorModified.Text = "Date Modified: " + FileOperationText.GetDateModifiedText(path);
+            _lblErrorType.Text = "Type: " + GetFileTypeText(path ?? string.Empty);
+            _lblErrorSize.Text = "Size: " + FileOperationText.GetSizeText(path ?? string.Empty);
+            _lblErrorModified.Text = "Date Modified: " + FileOperationText.GetDateModifiedText(path ?? string.Empty);
 
             _lblErrorType.Visible = true;
             _lblErrorSize.Visible = true;
             _lblErrorModified.Visible = true;
         }
 
-        SetErrorIcon(path, isDirectory);
+        SetErrorIcon(path ?? string.Empty, isDirectory);
     }
 
     private void SetErrorIcon(string path, bool isDirectory)
     {
-        _errorIconPath = path ?? string.Empty;
+        path ??= string.Empty;
+        _errorIconPath = path;
         _errorIconIsDirectory = isDirectory;
 
         Image? oldImage = _picErrorIcon.Image;
