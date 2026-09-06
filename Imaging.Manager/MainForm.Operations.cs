@@ -1,4 +1,4 @@
-using Imaging.Core;
+﻿using Imaging.Core;
 using Shared.Shell.Theming;
 using System.Diagnostics;
 using System.Globalization;
@@ -340,14 +340,14 @@ public partial class MainForm
 
         string? imagePath = RunExplorerPicker(
             save: false,
-            title: $"Select WIM to deploy to Disk {disk.DiskNumber}",
-            extension: ".wim");
+            title: $"Select WIM or split WIM to deploy to Disk {disk.DiskNumber}",
+            extension: ".wim;.swm");
         if (string.IsNullOrWhiteSpace(imagePath))
             return;
 
         if (!File.Exists(imagePath))
         {
-            MessageBox.Show(this, "The selected WIM file no longer exists.", "Deploy WIM", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(this, "The selected WIM or split WIM file no longer exists.", "Deploy WIM", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
 
@@ -421,7 +421,7 @@ public partial class MainForm
             : result.Output;
         MessageBox.Show(
             this,
-            "Imaging Manager could not read the image list from the selected WIM.\n\n" + details,
+            "Imaging Manager could not read the image list from the selected WIM or split WIM.\n\n" + details,
             title,
             MessageBoxButtons.OK,
             MessageBoxIcon.Error);
@@ -507,7 +507,7 @@ public partial class MainForm
             {
                 MessageBox.Show(
                     this,
-                    $"The selected WIM file is no longer accessible after preparing the deployment drive letters.\n\n{effectiveImagePath}",
+                    $"The selected WIM or split WIM file is no longer accessible after preparing the deployment drive letters.\n\n{effectiveImagePath}",
                     "Deploy WIM",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
@@ -1541,6 +1541,392 @@ public partial class MainForm
             MessageBoxIcon.Information);
     }
 
+
+    private async Task ShowImageInfoAsync()
+    {
+        if (_operationActive)
+            return;
+
+        string? imagePath = RunExplorerPicker(
+            save: false,
+            title: "Select image file",
+            extension: ".wim;.swm;.ffu;.vhd;.vhdx");
+        if (string.IsNullOrWhiteSpace(imagePath))
+            return;
+
+        if (!File.Exists(imagePath))
+        {
+            MessageBox.Show(this, "The selected image file no longer exists.", "Image Info", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        string imageFullPath;
+        try
+        {
+            imageFullPath = DismWimBackend.ResolvePrimaryImageFile(imagePath);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Image Info", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        WimOperationResult result;
+        SetWaitCursorState(true);
+        try
+        {
+            result = await _wimBackend.GetImageInfoAsync(imageFullPath, imageIndex: null, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            result = new WimOperationResult
+            {
+                Success = false,
+                ExitCode = -1,
+                Output = ex.Message
+            };
+        }
+        finally
+        {
+            SetWaitCursorState(false);
+        }
+
+        if (!result.Success)
+        {
+            string details = string.IsNullOrWhiteSpace(result.Output)
+                ? $"DISM exited with code {result.ExitCode}."
+                : result.Output;
+            MessageBox.Show(this, details, "Image Info Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        using ImageInfoDialog info = new(imageFullPath, result.Output);
+        info.ShowDialog(this);
+    }
+
+    private async Task DeleteWimImageFromMenuAsync()
+    {
+        if (_operationActive)
+            return;
+
+        string? imagePath = RunExplorerPicker(
+            save: false,
+            title: "Select WIM image",
+            extension: ".wim");
+        if (string.IsNullOrWhiteSpace(imagePath))
+            return;
+
+        if (!File.Exists(imagePath))
+        {
+            MessageBox.Show(this, "The selected WIM file no longer exists.", "Delete WIM Image", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        WimImageInfoResult? imageInfo = await TryLoadWimImageInfoAsync(imagePath, "Delete WIM Image");
+        if (imageInfo == null)
+            return;
+
+        if (imageInfo.Images.Count <= 1)
+        {
+            MessageBox.Show(
+                this,
+                "DISM Delete Image requires a WIM containing more than one image.",
+                "Delete WIM Image",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        using DeleteWimImageConfirmDialog confirm = new(imagePath, imageInfo.Images);
+        if (confirm.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        await DeleteWimImageAsync(imagePath, confirm.SelectedImage, imageInfo.Images.Count);
+    }
+
+    private async Task SplitWimFromMenuAsync()
+    {
+        if (_operationActive)
+            return;
+
+        string? sourcePath = RunExplorerPicker(
+            save: false,
+            title: "Select WIM to split",
+            extension: ".wim");
+        if (string.IsNullOrWhiteSpace(sourcePath))
+            return;
+
+        if (!File.Exists(sourcePath))
+        {
+            MessageBox.Show(this, "The selected WIM file no longer exists.", "Split WIM", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        await SplitWimAsync(sourcePath);
+    }
+
+    private async Task<bool> DeleteWimImageAsync(
+        string imagePath,
+        WimImageInfo image,
+        int imageCount)
+    {
+        if (imageCount <= 1)
+        {
+            MessageBox.Show(
+                this,
+                "DISM Delete Image requires a WIM containing more than one image.",
+                "Delete WIM Image",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return false;
+        }
+
+        if (!TryBeginOperation("Delete WIM Image"))
+            return false;
+
+        UpdateSelectedDiskPanel();
+        Enabled = false;
+
+        using WimServicingProgressDialog progressDialog = new(
+            "Delete WIM Image",
+            $"Deleting {image.DisplayName}",
+            $"WIM File: {imagePath}");
+        progressDialog.Show(this);
+
+        Progress<WimOperationProgress> progress = new(update => progressDialog.UpdateProgress(update));
+        WimOperationResult result;
+        try
+        {
+            result = await _wimBackend.DeleteImageAsync(
+                imagePath,
+                image.Index,
+                progress,
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            result = new WimOperationResult { Success = false, ExitCode = -1, Output = ex.Message };
+        }
+        finally
+        {
+            progressDialog.AllowClose();
+            progressDialog.Close();
+            EndOperation();
+            Enabled = true;
+            Activate();
+        }
+
+        if (!result.Success)
+        {
+            string details = string.IsNullOrWhiteSpace(result.Output)
+                ? $"DISM exited with code {result.ExitCode}."
+                : result.Output;
+            MessageBox.Show(this, details, "Delete WIM Image Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
+        }
+
+        MessageBox.Show(
+            this,
+            $"The WIM image was deleted successfully.\n\nImage: {image.DisplayName}\nWIM File: {imagePath}",
+            "Delete WIM Image",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+        return true;
+    }
+
+    private async Task<bool> SplitWimAsync(string sourcePath)
+    {
+        if (!Path.GetExtension(sourcePath).Equals(".wim", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        string sourceDirectory = Path.GetDirectoryName(sourcePath) ?? string.Empty;
+        string initialDestination = Path.Combine(
+            sourceDirectory,
+            Path.GetFileNameWithoutExtension(sourcePath) + ".swm");
+        string? destinationPath = RunExplorerPicker(
+            save: true,
+            title: "Split WIM to SWM files",
+            extension: ".swm",
+            initialPath: initialDestination);
+        if (string.IsNullOrWhiteSpace(destinationPath))
+            return false;
+
+        if (!destinationPath.EndsWith(".swm", StringComparison.OrdinalIgnoreCase))
+            destinationPath += ".swm";
+
+        string destinationFullPath;
+        try
+        {
+            destinationFullPath = Path.GetFullPath(destinationPath);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Split WIM", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
+        }
+
+        using SplitWimConfirmDialog confirm = new(sourcePath, destinationFullPath);
+        if (confirm.ShowDialog(this) != DialogResult.OK)
+            return false;
+
+        IReadOnlyList<string> existingParts = GetSplitWimFamilyFiles(destinationFullPath);
+        if (existingParts.Count > 0)
+        {
+            string filesText = existingParts.Count == 1
+                ? existingParts[0]
+                : $"{existingParts.Count} existing SWM files beginning with:\n{existingParts[0]}";
+            DialogResult replace = MessageBox.Show(
+                this,
+                $"A split WIM set already exists at this destination.\n\n{filesText}\n\nReplace the existing set?",
+                "Split WIM",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
+            if (replace != DialogResult.Yes)
+                return false;
+
+            if (!TryDeleteSplitWimFamily(destinationFullPath, out string? deleteError))
+            {
+                MessageBox.Show(
+                    this,
+                    "The existing split WIM set could not be removed.\n\n" + deleteError,
+                    "Split WIM",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                return false;
+            }
+        }
+
+        if (!TryBeginOperation("Split WIM"))
+            return false;
+
+        UpdateSelectedDiskPanel();
+        Enabled = false;
+
+        using WimSplitProgressDialog progressDialog = new(sourcePath, destinationFullPath);
+        using CancellationTokenSource cts = new();
+        progressDialog.CancelRequested += (_, _) => cts.Cancel();
+        progressDialog.Show(this);
+
+        Progress<WimOperationProgress> progress = new(update => progressDialog.UpdateProgress(update));
+        WimOperationResult result;
+        try
+        {
+            result = await _wimBackend.SplitAsync(
+                sourcePath,
+                destinationFullPath,
+                confirm.FileSizeMb,
+                progress,
+                cts.Token);
+        }
+        catch (Exception ex)
+        {
+            result = new WimOperationResult { Success = false, ExitCode = -1, Output = ex.Message };
+        }
+        finally
+        {
+            progressDialog.AllowClose();
+            progressDialog.Close();
+            EndOperation();
+            Enabled = true;
+            Activate();
+        }
+
+        if (!result.Success)
+            _ = TryDeleteSplitWimFamily(destinationFullPath, out _);
+
+        if (result.Canceled)
+        {
+            MessageBox.Show(
+                this,
+                "The WIM split operation was canceled. Partial SWM files were removed.",
+                "Split WIM Canceled",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return false;
+        }
+
+        if (!result.Success)
+        {
+            string details = string.IsNullOrWhiteSpace(result.Output)
+                ? $"DISM exited with code {result.ExitCode}."
+                : result.Output;
+            MessageBox.Show(this, details, "Split WIM Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
+        }
+
+        IReadOnlyList<string> parts = GetSplitWimFamilyFiles(destinationFullPath);
+        MessageBox.Show(
+            this,
+            $"The WIM was split successfully.\n\nParts: {parts.Count}\nFirst SWM: {destinationFullPath}\nMaximum requested part size: {confirm.FileSizeMb:N0} MB",
+            "Split WIM",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+        return true;
+    }
+
+    private static IReadOnlyList<string> GetSplitWimFamilyFiles(string firstSwmPath)
+    {
+        string fullPath = Path.GetFullPath(firstSwmPath);
+        string? directory = Path.GetDirectoryName(fullPath);
+        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+            return Array.Empty<string>();
+
+        string stem = Path.GetFileNameWithoutExtension(fullPath);
+        List<string> files = new();
+        foreach (string file in Directory.EnumerateFiles(directory, stem + "*.swm", SearchOption.TopDirectoryOnly))
+        {
+            string candidateStem = Path.GetFileNameWithoutExtension(file);
+            if (candidateStem.Equals(stem, StringComparison.OrdinalIgnoreCase))
+            {
+                files.Add(file);
+                continue;
+            }
+
+            if (!candidateStem.StartsWith(stem, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            string suffix = candidateStem[stem.Length..];
+            if (int.TryParse(suffix, NumberStyles.None, CultureInfo.InvariantCulture, out int partNumber) && partNumber >= 2)
+                files.Add(file);
+        }
+
+        return files
+            .OrderBy(static file => GetSplitWimPartNumber(file), Comparer<int>.Default)
+            .ThenBy(static file => file, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static int GetSplitWimPartNumber(string path)
+    {
+        string stem = Path.GetFileNameWithoutExtension(path);
+        int pos = stem.Length;
+        while (pos > 0 && char.IsDigit(stem[pos - 1]))
+            pos--;
+
+        return pos == stem.Length ||
+               !int.TryParse(stem[pos..], NumberStyles.None, CultureInfo.InvariantCulture, out int part)
+            ? 1
+            : part;
+    }
+
+    private static bool TryDeleteSplitWimFamily(string firstSwmPath, out string? error)
+    {
+        try
+        {
+            foreach (string file in GetSplitWimFamilyFiles(firstSwmPath))
+                File.Delete(file);
+
+            error = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
     private async Task ExportWimAsync()
     {
         if (_operationActive)
@@ -1713,14 +2099,14 @@ public partial class MainForm
         string partitionName = GetPartitionDisplayName(partition);
         string? imagePath = RunExplorerPicker(
             save: false,
-            title: $"Select WIM to apply to {partitionName}",
-            extension: ".wim");
+            title: $"Select WIM or split WIM to apply to {partitionName}",
+            extension: ".wim;.swm");
         if (string.IsNullOrWhiteSpace(imagePath))
             return;
 
         if (!File.Exists(imagePath))
         {
-            MessageBox.Show(this, "The selected WIM file no longer exists.", "Apply WIM", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(this, "The selected WIM or split WIM file no longer exists.", "Apply WIM", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
 
@@ -1872,7 +2258,7 @@ public partial class MainForm
                 {
                     MessageBox.Show(
                         this,
-                        $"The selected WIM file is no longer accessible after reassigning the target to C:.\n\n{effectiveImagePath}",
+                        $"The selected WIM or split WIM file is no longer accessible after reassigning the target to C:.\n\n{effectiveImagePath}",
                         "Apply WIM",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Error);

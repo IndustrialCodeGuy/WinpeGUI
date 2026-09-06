@@ -92,12 +92,7 @@ public partial class MainForm
     {
         _rightPanel = new Panel
         {
-            Dock = DockStyle.Fill,
-            BackColor = ShellTheme.WindowBack
-        };
-
-        _pnlGlobalActions = new Panel
-        {
+            Dock = DockStyle.None,
             BackColor = ShellTheme.WindowBack
         };
 
@@ -126,17 +121,15 @@ public partial class MainForm
         };
         _pnlDisks.HorizontalScroll.Enabled = false;
         _pnlDisks.Resize += (_, _) => LayoutDiskTiles();
+        _pnlDisks.MouseDown += (_, _) => DeselectTilesFromNeutralInteraction();
 
         _btnCapture = CreateActionButton("Capture FFU", async () => await CaptureSelectedDiskAsync());
         _btnApply = CreateActionButton("Apply FFU", async () => await ApplyToSelectedDiskAsync());
-        _btnMountWim = CreateActionButton("Mount WIM", async () => await MountWimAsync());
         _btnUnmountWim = CreateActionButton("Unmount WIM", async () => await UnmountWimAsync());
         _btnRemountWim = CreateActionButton("Remount WIM", async () => await RemountWimAsync());
-        _btnCleanupMounts = CreateActionButton("Cleanup Mounts", async () => await CleanupMountsAsync());
         _btnCaptureWim = CreateActionButton("Capture WIM", async () => await CaptureSelectedPartitionWimAsync());
         _btnApplyWim = CreateActionButton("Apply WIM", async () => await ApplyWimToSelectedPartitionAsync());
         _btnDeployWim = CreateActionButton("Deploy WIM", async () => await DeployWimToSelectedDiskAsync());
-        _btnExportWim = CreateActionButton("Export WIM", async () => await ExportWimAsync());
         _btnAddDrivers = CreateActionButton("Add Drivers", async () => await AddDriversAsync());
         _btnGetInfo = CreateActionButton("Get Info", () =>
         {
@@ -144,7 +137,6 @@ public partial class MainForm
             return Task.CompletedTask;
         });
         _btnUnlock = CreateActionButton("Unlock", async () => await UnlockSelectedPartitionAsync());
-        _btnRefresh = CreateActionButton("Refresh", async () => await RefreshViewAsync());
 
         _lblStatus = new Label
         {
@@ -154,11 +146,6 @@ public partial class MainForm
             TextAlign = ContentAlignment.MiddleLeft,
             Visible = false
         };
-
-        _pnlGlobalActions.Controls.Add(_btnMountWim);
-        _pnlGlobalActions.Controls.Add(_btnExportWim);
-        _pnlGlobalActions.Controls.Add(_btnCleanupMounts);
-        _pnlGlobalActions.Controls.Add(_btnRefresh);
 
         _pnlContextActions.Controls.Add(_lblSelectionContext);
         _pnlContextActions.Controls.Add(_btnGetInfo);
@@ -172,16 +159,48 @@ public partial class MainForm
         _pnlContextActions.Controls.Add(_btnAddDrivers);
         _pnlContextActions.Controls.Add(_btnUnlock);
 
-        _rightPanel.Controls.Add(_pnlGlobalActions);
+        // The form stays hidden while the initial disk/WIM inventory is loaded.
+        // Keep the manually positioned contextual action strip self-sufficient
+        // so a late parent/dock resize cannot leave its buttons at default bounds.
+        _pnlContextActions.Resize += (_, _) =>
+            LayoutContextActionStrip(_mPx.DetailButtonWidth, _mPx.DetailButtonHeight, _mPx.DetailButtonGap);
+
         _rightPanel.Controls.Add(_pnlDisks);
         _rightPanel.Controls.Add(_lblStatus);
         _rightPanel.Controls.Add(_pnlContextActions);
         _rightPanel.Resize += (_, _) => LayoutDiskDetails(_rightPanel);
+        _rightPanel.MouseDown += (_, _) => DeselectTilesFromNeutralInteraction();
+        _pnlContextActions.MouseDown += (_, _) => DeselectTilesFromNeutralInteraction();
+        _lblSelectionContext.MouseDown += (_, _) => DeselectTilesFromNeutralInteraction();
+        _lblStatus.MouseDown += (_, _) => DeselectTilesFromNeutralInteraction();
 
         Controls.Add(_rightPanel);
 
+        // Do not rely on WinForms dock/z-order interaction between the MenuStrip
+        // and the imaging content.  Give the content panel explicit bounds below
+        // the menu so the normal detail margin can never be painted underneath it.
+        LayoutMainContentBelowMenu();
+
         ApplyChromeFonts();
+        LayoutMainContentBelowMenu();
         LayoutDiskDetails(_rightPanel);
+    }
+
+    private void LayoutMainContentBelowMenu()
+    {
+        if (_rightPanel is null || _rightPanel.IsDisposed)
+            return;
+
+        int menuHeight = _mainMenu is { IsDisposed: false }
+            ? Math.Max(_mainMenu.Height, _mainMenu.PreferredSize.Height)
+            : 0;
+
+        SetBoundsIfChanged(
+            _rightPanel,
+            0,
+            menuHeight,
+            Math.Max(0, ClientSize.Width),
+            Math.Max(0, ClientSize.Height - menuHeight));
     }
 
     private Button CreateActionButton(string text, Func<Task> action)
@@ -191,8 +210,15 @@ public partial class MainForm
             Text = text,
             UseVisualStyleBackColor = true
         };
-        button.Click += async (_, _) => await RunUiActionAsync(action);
+        _actionButtonActions[button] = action;
+        button.Click += async (_, _) => await RunActionButtonAsync(button);
         return button;
+    }
+
+    private async Task RunActionButtonAsync(Button button)
+    {
+        if (_actionButtonActions.TryGetValue(button, out Func<Task>? action))
+            await RunUiActionAsync(action);
     }
 
     private async Task RunUiActionAsync(Func<Task> action)
@@ -239,17 +265,13 @@ public partial class MainForm
         int statusHeight = _mPx.DetailStatusHeight;
 
         int fullWidth = Math.Max(0, panel.ClientSize.Width - (margin * 2));
-        int globalTop = margin;
-        SetBoundsIfChanged(_pnlGlobalActions, margin, globalTop, fullWidth, buttonHeight);
-        LayoutGlobalActionStrip(buttonWidth, buttonHeight, buttonGap);
-
+        int rowsTop = margin;
         int contextTop = Math.Max(
-            globalTop + buttonHeight + gap,
+            rowsTop + buttonHeight + gap,
             panel.ClientSize.Height - margin - buttonHeight);
         SetBoundsIfChanged(_pnlContextActions, margin, contextTop, fullWidth, buttonHeight);
         LayoutContextActionStrip(buttonWidth, buttonHeight, buttonGap);
 
-        int rowsTop = globalTop + buttonHeight + gap;
         int rowsBottom = contextTop - gap;
         int statusTop = rowsBottom;
         if (_lblStatus.Visible)
@@ -264,29 +286,8 @@ public partial class MainForm
         LayoutDiskTiles();
     }
 
-    private void LayoutGlobalActionStrip(int buttonWidth, int buttonHeight, int buttonGap)
-    {
-        Button[] leftButtons =
-        {
-            _btnMountWim,
-            _btnExportWim,
-            _btnCleanupMounts
-        };
-
-        int left = 0;
-        foreach (Button button in leftButtons.Where(static button => button.Visible))
-        {
-            SetBoundsIfChanged(button, left, 0, buttonWidth, buttonHeight);
-            left += buttonWidth + buttonGap;
-        }
-
-        int refreshLeft = Math.Max(0, _pnlGlobalActions.ClientSize.Width - buttonWidth);
-        SetBoundsIfChanged(_btnRefresh, refreshLeft, 0, buttonWidth, buttonHeight);
-    }
-
-    private void LayoutContextActionStrip(int buttonWidth, int buttonHeight, int buttonGap)
-    {
-        Button[] orderedButtons =
+    private Button[] GetOrderedContextActionButtons() =>
+        new[]
         {
             _btnGetInfo,
             _btnCapture,
@@ -300,7 +301,11 @@ public partial class MainForm
             _btnUnlock
         };
 
-        Button[] visibleButtons = orderedButtons.Where(static button => button.Visible).ToArray();
+    private void LayoutContextActionStrip(int buttonWidth, int buttonHeight, int buttonGap)
+    {
+        Button[] visibleButtons = GetOrderedContextActionButtons()
+            .Where(static button => button.Visible)
+            .ToArray();
         int buttonsWidth = visibleButtons.Length == 0
             ? 0
             : (visibleButtons.Length * buttonWidth) + ((visibleButtons.Length - 1) * buttonGap);
@@ -499,11 +504,13 @@ public partial class MainForm
                 SelectPartitionTile(preferredPartitionTile, updateUi: false);
             else if (preferredDiskTile != null)
                 SelectDiskTile(preferredDiskTile, updateUi: false);
-            else if (_pnlDisks.Controls.OfType<Panel>()
+            else if (!_selectionExplicitlyCleared &&
+                     _pnlDisks.Controls.OfType<Panel>()
                          .Select(row => row.Tag as DiskRowContext)
                          .FirstOrDefault(context => context != null)?.DiskTile is Panel firstDiskTile)
                 SelectDiskTile(firstDiskTile, updateUi: false);
-            else if (_pnlOpticalVolumes?.Controls.OfType<Panel>().FirstOrDefault() is Panel firstOpticalTile)
+            else if (!_selectionExplicitlyCleared &&
+                     _pnlOpticalVolumes?.Controls.OfType<Panel>().FirstOrDefault() is Panel firstOpticalTile)
                 SelectOpticalVolumeTile(firstOpticalTile, updateUi: false);
 
             LayoutDiskTiles();
@@ -532,6 +539,8 @@ public partial class MainForm
             BackColor = ShellTheme.WindowBack
         };
 
+        row.MouseDown += (_, _) => DeselectTilesFromNeutralInteraction();
+
         Panel diskTile = CreateDiskTile(disk);
         FlowLayoutPanel partitionStrip = new()
         {
@@ -544,6 +553,7 @@ public partial class MainForm
             BorderStyle = BorderStyle.FixedSingle
         };
         partitionStrip.Resize += (_, _) => LayoutPartitionStrip(partitionStrip, disk);
+        partitionStrip.MouseDown += (_, _) => DeselectTilesFromNeutralInteraction();
 
         foreach (ImagingPartitionInfo partition in disk.Partitions)
             partitionStrip.Controls.Add(CreatePartitionTile(disk, partition));
@@ -706,6 +716,32 @@ public partial class MainForm
         foreach (Control child in children)
             child.Click += select;
 
+        ContextMenuStrip contextMenu = CreateTileContextMenu();
+        tile.ContextMenuStrip = contextMenu;
+        foreach (Control child in children)
+            child.ContextMenuStrip = contextMenu;
+
+        void selectOnRightClick(object? sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Right)
+                return;
+
+            select(sender, e);
+        }
+
+        tile.MouseDown += selectOnRightClick;
+        foreach (Control child in children)
+            child.MouseDown += selectOnRightClick;
+
+        contextMenu.Opening += (_, e) =>
+        {
+            select(tile, EventArgs.Empty);
+            UpdateSelectedDiskPanel();
+            PopulateTileContextMenu(contextMenu);
+            e.Cancel = contextMenu.Items.Count == 0;
+        };
+        tile.Disposed += (_, _) => contextMenu.Dispose();
+
         void hover(object? _, EventArgs __)
         {
             if (!IsSelectedTile(tile))
@@ -729,6 +765,58 @@ public partial class MainForm
         }
     }
 
+    private ContextMenuStrip CreateTileContextMenu()
+    {
+        ContextMenuStrip menu = new()
+        {
+            Renderer = _mainMenu.Renderer,
+            BackColor = ShellTheme.ContentBack,
+            ForeColor = ShellTheme.TextColor,
+            ShowImageMargin = false,
+            ShowCheckMargin = false
+        };
+
+        if (_chromeFont != null)
+            menu.Font = _chromeFont;
+
+        return menu;
+    }
+
+    private void PopulateTileContextMenu(ContextMenuStrip menu)
+    {
+        while (menu.Items.Count > 0)
+        {
+            ToolStripItem item = menu.Items[0];
+            menu.Items.RemoveAt(0);
+            item.Dispose();
+        }
+
+        if (_chromeFont != null)
+            menu.Font = _chromeFont;
+
+        Button[] actions = GetOrderedContextActionButtons()
+            .Where(static button => button.Visible)
+            .ToArray();
+
+        for (int i = 0; i < actions.Length; i++)
+        {
+            Button button = actions[i];
+            if (i == 1 && actions[0] == _btnGetInfo)
+                menu.Items.Add(new ToolStripSeparator());
+
+            ToolStripMenuItem item = new(button.Text)
+            {
+                Enabled = button.Enabled,
+                ForeColor = ShellTheme.TextColor
+            };
+            if (_chromeFont != null)
+                item.Font = _chromeFont;
+
+            item.Click += async (_, _) => await RunActionButtonAsync(button);
+            menu.Items.Add(item);
+        }
+    }
+
     private bool IsSelectedTile(Panel tile) =>
         _selectedDiskTile == tile ||
         _selectedPartitionTile == tile ||
@@ -746,11 +834,14 @@ public partial class MainForm
             BackColor = ShellTheme.WindowBack
         };
 
+        row.MouseDown += (_, _) => DeselectTilesFromNeutralInteraction();
+
         Panel header = new()
         {
             BorderStyle = BorderStyle.FixedSingle,
             BackColor = ShellTheme.ContentBack
         };
+        header.MouseDown += (_, _) => DeselectTilesFromNeutralInteraction();
         Label name = new()
         {
             Text = "Optical Media",
@@ -769,6 +860,8 @@ public partial class MainForm
         };
         header.Controls.Add(name);
         header.Controls.Add(sub);
+        name.MouseDown += (_, _) => DeselectTilesFromNeutralInteraction();
+        sub.MouseDown += (_, _) => DeselectTilesFromNeutralInteraction();
 
         _pnlOpticalVolumes = new FlowLayoutPanel
         {
@@ -781,6 +874,7 @@ public partial class MainForm
             BorderStyle = BorderStyle.FixedSingle
         };
         _pnlOpticalVolumes.Resize += (_, _) => LayoutOpticalVolumeTiles();
+        _pnlOpticalVolumes.MouseDown += (_, _) => DeselectTilesFromNeutralInteraction();
 
         row.Controls.Add(header);
         row.Controls.Add(_pnlOpticalVolumes);
@@ -870,8 +964,8 @@ public partial class MainForm
         };
 
         string details = volume.TotalSizeBytes > 0
-            ? $"CD Drive · {FormatBytes(volume.TotalSizeBytes)}"
-            : "CD Drive";
+            ? $"Total: {FormatBytes(volume.TotalSizeBytes)}"
+            : "Total: —";
         Label sub = new()
         {
             Text = details,
@@ -902,12 +996,14 @@ public partial class MainForm
             Padding = new Padding(0),
             BackColor = ShellTheme.WindowBack
         };
+        row.MouseDown += (_, _) => DeselectTilesFromNeutralInteraction();
 
         Panel header = new()
         {
             BorderStyle = BorderStyle.FixedSingle,
             BackColor = ShellTheme.ContentBack
         };
+        header.MouseDown += (_, _) => DeselectTilesFromNeutralInteraction();
         Label name = new()
         {
             Text = "Mounted WIMs",
@@ -926,6 +1022,8 @@ public partial class MainForm
         };
         header.Controls.Add(name);
         header.Controls.Add(sub);
+        name.MouseDown += (_, _) => DeselectTilesFromNeutralInteraction();
+        sub.MouseDown += (_, _) => DeselectTilesFromNeutralInteraction();
 
         _pnlMountedWims = new FlowLayoutPanel
         {
@@ -938,6 +1036,7 @@ public partial class MainForm
             BorderStyle = BorderStyle.FixedSingle
         };
         _pnlMountedWims.Resize += (_, _) => LayoutMountedWimTiles();
+        _pnlMountedWims.MouseDown += (_, _) => DeselectTilesFromNeutralInteraction();
 
         row.Controls.Add(header);
         row.Controls.Add(_pnlMountedWims);
@@ -1485,6 +1584,7 @@ public partial class MainForm
         ClearMountedWimSelection();
         ClearDiskAndPartitionSelection();
         _selectedDiskTile = tile;
+        _selectionExplicitlyCleared = false;
         tile.BackColor = ShellTheme.ItemSelectedBack;
         if (updateUi)
             UpdateSelectedDiskPanel();
@@ -1506,6 +1606,7 @@ public partial class MainForm
         ClearMountedWimSelection();
         ClearDiskAndPartitionSelection();
         _selectedPartitionTile = tile;
+        _selectionExplicitlyCleared = false;
         tile.BackColor = ShellTheme.ItemSelectedBack;
         if (updateUi)
             UpdateSelectedDiskPanel();
@@ -1523,6 +1624,7 @@ public partial class MainForm
         ClearMountedWimSelection();
         ClearOpticalVolumeSelection();
         _selectedOpticalVolumeTile = tile;
+        _selectionExplicitlyCleared = false;
         tile.BackColor = ShellTheme.ItemSelectedBack;
         if (updateUi)
             UpdateSelectedDiskPanel();
@@ -1537,6 +1639,7 @@ public partial class MainForm
         ClearOpticalVolumeSelection();
         ClearMountedWimSelection();
         _selectedMountedWimTile = tile;
+        _selectionExplicitlyCleared = false;
         tile.BackColor = ShellTheme.ItemSelectedBack;
         if (updateUi)
             UpdateSelectedDiskPanel();
@@ -1547,6 +1650,25 @@ public partial class MainForm
         ClearDiskAndPartitionSelection();
         ClearOpticalVolumeSelection();
         ClearMountedWimSelection();
+    }
+
+    private bool HasTileSelection() =>
+        _selectedDiskTile != null ||
+        _selectedPartitionTile != null ||
+        _selectedOpticalVolumeTile != null ||
+        _selectedMountedWimTile != null;
+
+    private void DeselectTilesFromNeutralInteraction()
+    {
+        if (!HasTileSelection())
+        {
+            _selectionExplicitlyCleared = true;
+            return;
+        }
+
+        ClearSelectionVisuals();
+        _selectionExplicitlyCleared = true;
+        UpdateSelectedDiskPanel();
     }
 
     private void ClearDiskAndPartitionSelection()
@@ -1730,14 +1852,13 @@ public partial class MainForm
         _lblStatus.ForeColor = GetInformationTextColor();
         bool actionsAvailable = !_initialInventoryLoading && !_operationActive && !_diskRefreshInProgress;
 
-        _btnMountWim.Visible = true;
-        _btnExportWim.Visible = true;
-        _btnCleanupMounts.Visible = true;
-        _btnRefresh.Visible = true;
-        _btnMountWim.Enabled = actionsAvailable;
-        _btnExportWim.Enabled = actionsAvailable;
-        _btnCleanupMounts.Enabled = actionsAvailable && anyInvalidMountedWim;
-        _btnRefresh.Enabled = actionsAvailable;
+        _miMountWim.Enabled = actionsAvailable;
+        _miExportWim.Enabled = actionsAvailable;
+        _miImageInfo.Enabled = actionsAvailable;
+        _miDeleteWimImage.Enabled = actionsAvailable;
+        _miSplitWim.Enabled = actionsAvailable;
+        _miCleanupMounts.Enabled = actionsAvailable && anyInvalidMountedWim;
+        _miRefresh.Enabled = actionsAvailable;
 
         _btnGetInfo.Visible = diskSelectionActive || partitionSelectionActive || opticalSelectionActive || mountedWimSelectionActive;
         _btnCapture.Visible = diskSelectionActive;
@@ -1778,7 +1899,6 @@ public partial class MainForm
                         ? $"Disk {disk!.DiskNumber}" + selectionBusySuffix
                         : "Select a disk, partition, optical volume, or mounted WIM";
 
-        LayoutGlobalActionStrip(_mPx.DetailButtonWidth, _mPx.DetailButtonHeight, _mPx.DetailButtonGap);
         LayoutContextActionStrip(_mPx.DetailButtonWidth, _mPx.DetailButtonHeight, _mPx.DetailButtonGap);
         UpdateStatusLine();
     }

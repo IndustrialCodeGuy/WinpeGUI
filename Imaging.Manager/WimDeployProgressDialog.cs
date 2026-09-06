@@ -9,7 +9,7 @@ internal sealed class WimDeployProgressDialog : ImagingProgressDialogBase
             "Deploy WIM",
             $"Deploying {GetImageName(image)} to Disk {disk.DiskNumber}",
             "Preparing WIM deployment...",
-            $"WIM File: {imagePath}",
+            $"Image File: {imagePath}",
             secondaryDetail: null,
             cancelConfirmation: "Cancel the WIM deployment?\n\nThe target disk may already have been erased and can be left unbootable or partially deployed.",
             cancelDialogTitle: "Cancel Deployment")

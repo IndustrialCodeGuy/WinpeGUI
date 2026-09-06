@@ -32,7 +32,7 @@ internal sealed class DeployWimConfirmDialog : ImagingConfirmationDialogBase
             $"Target: Disk {disk.DiskNumber}\n{disk.Model}\n" +
             $"Size: {FormatBytes(disk.SizeBytes)}{serial}\nFirmware/layout: {firmwareText}");
         AddSingleLine($"Partitions: {layoutText}");
-        AddSingleLine($"WIM File: {imagePath}", gapAfter: 8);
+        AddSingleLine($"Image File: {imagePath}", gapAfter: 8);
 
         _imageSelector = new WimImageSelector(images, Font);
         AddControlRow(_imageSelector, _imageSelector.Height, gapAfter: 8);

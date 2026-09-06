@@ -61,24 +61,20 @@ public partial class MainForm
         Font = _chromeFont;
         if (_pnlDisks is not null) _pnlDisks.Font = _chromeFont;
         if (_rightPanel is not null) _rightPanel.Font = _chromeFont;
-        if (_pnlGlobalActions is not null) _pnlGlobalActions.Font = _chromeFont;
         if (_pnlContextActions is not null) _pnlContextActions.Font = _chromeFont;
         if (_lblSelectionContext is not null) _lblSelectionContext.Font = _chromeFont;
         if (_btnCapture is not null) _btnCapture.Font = _chromeFont;
         if (_btnApply is not null) _btnApply.Font = _chromeFont;
-        if (_btnRefresh is not null) _btnRefresh.Font = _chromeFont;
-        if (_btnMountWim is not null) _btnMountWim.Font = _chromeFont;
         if (_btnUnmountWim is not null) _btnUnmountWim.Font = _chromeFont;
         if (_btnRemountWim is not null) _btnRemountWim.Font = _chromeFont;
-        if (_btnCleanupMounts is not null) _btnCleanupMounts.Font = _chromeFont;
         if (_btnCaptureWim is not null) _btnCaptureWim.Font = _chromeFont;
         if (_btnApplyWim is not null) _btnApplyWim.Font = _chromeFont;
-        if (_btnExportWim is not null) _btnExportWim.Font = _chromeFont;
         if (_btnAddDrivers is not null) _btnAddDrivers.Font = _chromeFont;
         if (_btnUnlock is not null) _btnUnlock.Font = _chromeFont;
         if (_btnDeployWim is not null) _btnDeployWim.Font = _chromeFont;
         if (_btnGetInfo is not null) _btnGetInfo.Font = _chromeFont;
         if (_lblStatus is not null) _lblStatus.Font = _chromeFont;
+        ApplyMainMenuAppearance();
         ApplyChromeFontToChildren(_pnlDisks, _chromeFont);
     }
 
@@ -102,6 +98,7 @@ public partial class MainForm
         try
         {
             ApplyMinimumSize();
+            LayoutMainContentBelowMenu();
 
             if (_rightPanel is { IsDisposed: false })
                 LayoutDiskDetails(_rightPanel);
@@ -282,14 +279,15 @@ public partial class MainForm
 
     private sealed class ImagingManagerLayoutMetrics
     {
-        // The top global-action strip and bottom contextual-action strip leave
-        // enough vertical room for four disk rows plus the Mounted WIMs row.
+        // The bottom contextual-action strip leaves enough vertical room for
+        // four disk rows plus the Mounted WIMs row. Global actions live in the
+        // standard menu bar and no longer consume detail-panel height.
         public int InitialClientWidthDip { get; init; } = 750;
         public int InitialClientHeightDip { get; init; } = 500;
         public int DetailMarginDip { get; init; } = 12;
         public int DetailGapDip { get; init; } = 8;
         public int DetailButtonGapDip { get; init; } = 3;
-        public int DetailButtonWidthDip { get; init; } = 140;
+        public int DetailButtonWidthDip { get; init; } = 118;
         public int DetailButtonHeightDip { get; init; } = 29;
         public int DetailStatusHeightDip { get; init; } = 20;
         public int DetailContentMinimumWidthDip { get; init; } = 620;

@@ -1,4 +1,4 @@
-﻿using Imaging.Core;
+using Imaging.Core;
 
 namespace Imaging.Manager;
 
@@ -37,7 +37,7 @@ internal sealed class ApplyWimConfirmDialog : ImagingConfirmationDialogBase
             $"Target: Disk {disk.DiskNumber}, Partition {partition.PartitionNumber}\n" +
             $"Size: {FormatBytes(partition.SizeBytes)}\n" +
             $"Filesystem: {fileSystem}{type}{temporaryAccess}");
-        AddSingleLine($"WIM File: {imagePath}", gapAfter: 8);
+        AddSingleLine($"Image File: {imagePath}", gapAfter: 8);
 
         _imageSelector = new WimImageSelector(images, Font);
         AddControlRow(_imageSelector, _imageSelector.Height, gapAfter: 8);

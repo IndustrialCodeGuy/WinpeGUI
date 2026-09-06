@@ -13,7 +13,7 @@ internal sealed class WimApplyProgressDialog : ImagingProgressDialogBase
             "Apply WIM",
             GetHeading(partition, targetRoot, image),
             "Preparing WIM apply...",
-            $"WIM File: {imagePath}",
+            $"Image File: {imagePath}",
             secondaryDetail: null,
             cancelConfirmation: "Cancel the WIM apply operation?\n\nThe target partition may be left with a partially applied image.")
     {

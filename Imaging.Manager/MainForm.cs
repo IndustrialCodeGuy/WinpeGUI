@@ -23,8 +23,15 @@ public partial class MainForm : Form
 
     private VerticalOnlyFlowLayoutPanel _pnlDisks = null!;
     private Panel _rightPanel = null!;
-    private Panel _pnlGlobalActions = null!;
     private Panel _pnlContextActions = null!;
+    private MenuStrip _mainMenu = null!;
+    private ToolStripMenuItem _miImageInfo = null!;
+    private ToolStripMenuItem _miMountWim = null!;
+    private ToolStripMenuItem _miExportWim = null!;
+    private ToolStripMenuItem _miDeleteWimImage = null!;
+    private ToolStripMenuItem _miSplitWim = null!;
+    private ToolStripMenuItem _miCleanupMounts = null!;
+    private ToolStripMenuItem _miRefresh = null!;
     private Label _lblSelectionContext = null!;
     private Panel? _opticalVolumeRow;
     private FlowLayoutPanel? _pnlOpticalVolumes;
@@ -33,23 +40,21 @@ public partial class MainForm : Form
     private Label _lblStatus = null!;
     private Button _btnCapture = null!;
     private Button _btnApply = null!;
-    private Button _btnRefresh = null!;
-    private Button _btnMountWim = null!;
     private Button _btnUnmountWim = null!;
     private Button _btnRemountWim = null!;
-    private Button _btnCleanupMounts = null!;
     private Button _btnCaptureWim = null!;
     private Button _btnApplyWim = null!;
-    private Button _btnExportWim = null!;
     private Button _btnAddDrivers = null!;
     private Button _btnUnlock = null!;
     private Button _btnDeployWim = null!;
     private Button _btnGetInfo = null!;
+    private readonly Dictionary<Button, Func<Task>> _actionButtonActions = new();
 
     private Panel? _selectedDiskTile;
     private Panel? _selectedPartitionTile;
     private Panel? _selectedOpticalVolumeTile;
     private Panel? _selectedMountedWimTile;
+    private bool _selectionExplicitlyCleared = true;
     private IReadOnlyList<ImagingDiskInfo> _disks = Array.Empty<ImagingDiskInfo>();
     private IReadOnlyList<ImagingVolumeInfo> _opticalVolumes = Array.Empty<ImagingVolumeInfo>();
     private readonly Dictionary<int, Image> _diskImagesBySize = new();
@@ -91,6 +96,7 @@ public partial class MainForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = ShellTheme.WindowBack;
         ForeColor = ShellTheme.TextColor;
+        KeyPreview = true;
 
         _ = Handle;
         RecalcMetrics();
@@ -98,6 +104,7 @@ public partial class MainForm : Form
         ClientSize = new Size(_mPx.InitialClientWidth, _mPx.InitialClientHeight);
         TrackNormalClientSize();
 
+        InitializeMainMenu();
         InitializeDiskUi();
         ApplyMinimumSize();
         PerformLayout();
@@ -126,7 +133,34 @@ public partial class MainForm : Form
             return;
         }
 
+        if (value)
+        {
+            // Inventory loading intentionally keeps the window hidden. Before
+            // the first visible paint, force the docked detail panel and its
+            // contextual action strip through their final layout.
+            PerformLayout();
+            ApplyLayoutMetrics();
+            UpdateSelectedDiskPanel();
+        }
+
         base.SetVisibleCore(value);
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == Keys.Escape && HasTileSelection())
+        {
+            DeselectTilesFromNeutralInteraction();
+            return true;
+        }
+
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    protected override void OnClientSizeChanged(EventArgs e)
+    {
+        base.OnClientSizeChanged(e);
+        LayoutMainContentBelowMenu();
     }
 
     protected override void OnShown(EventArgs e)
