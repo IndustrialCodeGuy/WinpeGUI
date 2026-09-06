@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace Shell.Taskbar.Interop
@@ -58,14 +57,10 @@ namespace Shell.Taskbar.Interop
         {
             _proc = HookCallback;
 
-            // WH_KEYBOARD_LL doesn't require DLL injection; SetWindowsHookEx needs an HMODULE though.
-            // Passing GetModuleHandle of current module is standard for LL hooks.
-            using (var cur = Process.GetCurrentProcess())
-            using (var mod = cur.MainModule)
-            {
-                IntPtr hMod = GetModuleHandle(mod.ModuleName);
-                _hook = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, hMod, 0);
-            }
+            // WH_KEYBOARD_LL doesn't require DLL injection. Passing NULL to
+            // GetModuleHandle returns the module handle for this executable.
+            IntPtr hMod = GetModuleHandle(null);
+            _hook = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, hMod, 0);
 
             if (_hook == IntPtr.Zero)
                 throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
@@ -148,6 +143,6 @@ namespace Shell.Taskbar.Interop
         private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern IntPtr GetModuleHandle(string lpModuleName);
+        private static extern IntPtr GetModuleHandle(string? lpModuleName);
     }
 }
