@@ -34,4 +34,5 @@ public sealed class WimBootConfigurationResult
     public bool Success { get; init; }
     public int ExitCode { get; init; }
     public string Output { get; init; } = string.Empty;
+    public string Warning { get; init; } = string.Empty;
 }

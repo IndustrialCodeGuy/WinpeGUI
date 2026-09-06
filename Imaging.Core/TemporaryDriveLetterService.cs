@@ -1,6 +1,3 @@
-using System.Diagnostics;
-using System.Text;
-
 namespace Imaging.Core;
 
 public sealed class TemporaryDriveLetterService
@@ -8,7 +5,10 @@ public sealed class TemporaryDriveLetterService
     private static readonly object ReservationSync = new();
     private static readonly HashSet<char> ReservedLetters = new();
 
-    public TemporaryDriveLetterResult Assign(int diskNumber, int partitionNumber)
+    public async Task<TemporaryDriveLetterResult> AssignAsync(
+        int diskNumber,
+        int partitionNumber,
+        CancellationToken cancellationToken)
     {
         char letter;
         try
@@ -21,14 +21,20 @@ public sealed class TemporaryDriveLetterService
         }
 
         string root = $"{letter}:\\";
-        ProcessResult assign;
+        ProcessExecutionResult assign;
         try
         {
-            assign = RunDiskPart(
+            assign = await DiskPartRunner.RunAsync(
                 $"select disk {diskNumber}\r\n" +
                 $"select partition {partitionNumber}\r\n" +
                 $"assign letter={letter}\r\n" +
-                "exit\r\n");
+                "exit\r\n",
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            ReleaseReservation(letter);
+            throw;
         }
         catch (Exception ex)
         {
@@ -36,25 +42,50 @@ public sealed class TemporaryDriveLetterService
             return TemporaryDriveLetterResult.Failed(ex.Message);
         }
 
-        bool assigned = assign.ExitCode == 0;
-        if (assigned)
-            WaitForRootState(root, shouldExist: true);
+        if (assign.ExitCode == 0)
+        {
+            try
+            {
+                await WaitForRootStateAsync(root, shouldExist: true, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                if (Directory.Exists(root))
+                {
+                    _ = await RemoveAsync(
+                        diskNumber,
+                        partitionNumber,
+                        letter,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                else
+                {
+                    ReleaseReservation(letter);
+                }
+                throw;
+            }
+        }
 
-        if (!assigned || !Directory.Exists(root))
+        if (!assign.Success || !Directory.Exists(root))
         {
             string error = BuildProcessFailure(
                 $"DiskPart could not make Disk {diskNumber}, Partition {partitionNumber} accessible as {letter}:.",
                 assign);
 
-            if (assigned)
+            if (Directory.Exists(root))
             {
-                string? cleanupError = Remove(diskNumber, partitionNumber, letter);
+                string? cleanupError = await RemoveAsync(
+                    diskNumber,
+                    partitionNumber,
+                    letter,
+                    CancellationToken.None).ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(cleanupError))
                     error += "\n\n" + cleanupError;
             }
-
-            if (!Directory.Exists(root))
+            else
+            {
                 ReleaseReservation(letter);
+            }
 
             return TemporaryDriveLetterResult.Failed(error);
         }
@@ -103,29 +134,40 @@ public sealed class TemporaryDriveLetterService
             ReleaseReservation(assignment.DriveLetter);
     }
 
-    public string? Remove(TemporaryDriveLetterResult assignment)
+    public Task<string?> RemoveAsync(
+        TemporaryDriveLetterResult assignment,
+        CancellationToken cancellationToken)
     {
         if (!assignment.Success || assignment.DriveLetter == '\0')
-            return null;
+            return Task.FromResult<string?>(null);
 
-        return Remove(assignment.DiskNumber, assignment.PartitionNumber, assignment.DriveLetter);
+        return RemoveAsync(
+            assignment.DiskNumber,
+            assignment.PartitionNumber,
+            assignment.DriveLetter,
+            cancellationToken);
     }
 
-    private static string? Remove(int diskNumber, int partitionNumber, char letter)
+    private static async Task<string?> RemoveAsync(
+        int diskNumber,
+        int partitionNumber,
+        char letter,
+        CancellationToken cancellationToken)
     {
         string root = $"{letter}:\\";
         try
         {
-            ProcessResult remove = RunDiskPart(
+            ProcessExecutionResult remove = await DiskPartRunner.RunAsync(
                 $"select disk {diskNumber}\r\n" +
                 $"select partition {partitionNumber}\r\n" +
                 $"remove letter={letter}\r\n" +
-                "exit\r\n");
+                "exit\r\n",
+                cancellationToken).ConfigureAwait(false);
 
-            if (remove.ExitCode == 0)
-                WaitForRootState(root, shouldExist: false);
+            if (remove.Success)
+                await WaitForRootStateAsync(root, shouldExist: false, CancellationToken.None).ConfigureAwait(false);
 
-            if (remove.ExitCode != 0 || Directory.Exists(root))
+            if (!remove.Success || Directory.Exists(root))
             {
                 if (!Directory.Exists(root))
                     ReleaseReservation(letter);
@@ -137,6 +179,12 @@ public sealed class TemporaryDriveLetterService
 
             ReleaseReservation(letter);
             return null;
+        }
+        catch (OperationCanceledException)
+        {
+            if (!Directory.Exists(root))
+                ReleaseReservation(letter);
+            throw;
         }
         catch (Exception ex)
         {
@@ -198,62 +246,20 @@ public sealed class TemporaryDriveLetterService
             ReservedLetters.Remove(char.ToUpperInvariant(letter));
     }
 
-    private static ProcessResult RunDiskPart(string script)
-    {
-        string diskPartPath = Path.Combine(Environment.SystemDirectory, "diskpart.exe");
-        if (!File.Exists(diskPartPath))
-        {
-            throw new FileNotFoundException(
-                "DiskPart.exe was not found under the active Windows system directory.",
-                diskPartPath);
-        }
-
-        string scriptPath = Path.Combine(Path.GetTempPath(), $"ImagingManager-{Guid.NewGuid():N}.txt");
-        File.WriteAllText(scriptPath, script, Encoding.ASCII);
-
-        try
-        {
-            ProcessStartInfo startInfo = new()
-            {
-                FileName = diskPartPath,
-                WorkingDirectory = Path.GetDirectoryName(diskPartPath) ?? Environment.SystemDirectory,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            startInfo.ArgumentList.Add("/s");
-            startInfo.ArgumentList.Add(scriptPath);
-
-            using Process process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Unable to start DiskPart.exe.");
-            Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
-            Task<string> errorTask = process.StandardError.ReadToEndAsync();
-            process.WaitForExit();
-            string output = outputTask.GetAwaiter().GetResult();
-            string error = errorTask.GetAwaiter().GetResult();
-            return new ProcessResult(process.ExitCode, output.Trim(), error.Trim());
-        }
-        finally
-        {
-            try { File.Delete(scriptPath); } catch { }
-        }
-    }
-
-    private static void WaitForRootState(string root, bool shouldExist)
+    private static async Task WaitForRootStateAsync(
+        string root,
+        bool shouldExist,
+        CancellationToken cancellationToken)
     {
         for (int attempt = 0; attempt < 10 && Directory.Exists(root) != shouldExist; attempt++)
-            Thread.Sleep(100);
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
     }
 
-    private static string BuildProcessFailure(string message, ProcessResult result)
+    private static string BuildProcessFailure(string message, ProcessExecutionResult result)
     {
-        string detail = string.Join(Environment.NewLine, new[] { result.StandardOutput, result.StandardError }
-            .Where(static s => !string.IsNullOrWhiteSpace(s)));
+        string detail = result.CombinedOutput;
         return string.IsNullOrWhiteSpace(detail) ? message : message + "\n\n" + detail;
     }
-
-    private readonly record struct ProcessResult(int ExitCode, string StandardOutput, string StandardError);
 }
 
 public sealed class TemporaryDriveLetterReservation

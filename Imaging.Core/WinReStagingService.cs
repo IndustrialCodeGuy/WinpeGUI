@@ -27,7 +27,9 @@ public sealed class WinReStagingService
     public bool IsWindowsInstallation(string sourceRoot) =>
         Directory.Exists(Path.Combine(GetWindowsDirectory(sourceRoot), "System32"));
 
-    public WinReStageResult StageFromConfiguredRecoveryPartition(string sourceRoot)
+    public async Task<WinReStageResult> StageFromConfiguredRecoveryPartitionAsync(
+        string sourceRoot,
+        CancellationToken cancellationToken)
     {
         string root = ImagingPath.NormalizeDriveRoot(sourceRoot);
         if (root.Length == 0)
@@ -37,7 +39,7 @@ public sealed class WinReStagingService
         if (File.Exists(destination))
             return WinReStageResult.AlreadyPresent(destination);
 
-        RecoveryLocationResult location = FindConfiguredRecoveryLocation(root);
+        RecoveryLocationResult location = await FindConfiguredRecoveryLocationAsync(root, cancellationToken).ConfigureAwait(false);
         if (!location.Success)
             return WinReStageResult.Failed(location.Error);
 
@@ -48,7 +50,10 @@ public sealed class WinReStagingService
 
         try
         {
-            assignment = _temporaryDriveLetters.Assign(location.DiskNumber, location.PartitionNumber);
+            assignment = await _temporaryDriveLetters.AssignAsync(
+                location.DiskNumber,
+                location.PartitionNumber,
+                cancellationToken).ConfigureAwait(false);
             if (!assignment.Success)
             {
                 stagingError =
@@ -67,10 +72,14 @@ public sealed class WinReStagingService
                 else
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                    File.Copy(source, destination, overwrite: false);
+                    await CopyFileAsync(source, destination, cancellationToken).ConfigureAwait(false);
                     copied = true;
                 }
             }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -80,7 +89,9 @@ public sealed class WinReStagingService
         {
             if (assignment?.Success == true)
             {
-                removalError = _temporaryDriveLetters.Remove(assignment);
+                removalError = await _temporaryDriveLetters.RemoveAsync(
+                    assignment,
+                    CancellationToken.None).ConfigureAwait(false);
             }
         }
 
@@ -108,14 +119,22 @@ public sealed class WinReStagingService
         };
     }
 
-    public void RemoveStagedWinRe(string sourceRoot)
+    public Task RemoveStagedWinReAsync(string sourceRoot, CancellationToken cancellationToken)
     {
         string path = GetWinRePath(sourceRoot);
-        if (File.Exists(path))
+        if (!File.Exists(path))
+            return Task.CompletedTask;
+
+        return Task.Run(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             File.Delete(path);
+        }, cancellationToken);
     }
 
-    private RecoveryLocationResult FindConfiguredRecoveryLocation(string sourceRoot)
+    private async Task<RecoveryLocationResult> FindConfiguredRecoveryLocationAsync(
+        string sourceRoot,
+        CancellationToken cancellationToken)
     {
         string windowsDirectory = GetWindowsDirectory(sourceRoot);
         string systemReagentc = Path.Combine(Environment.SystemDirectory, "reagentc.exe");
@@ -130,7 +149,10 @@ public sealed class WinReStagingService
                 "REAgentC.exe was not found, so the configured Windows RE partition could not be determined.");
         }
 
-        ProcessResult result = RunProcess(reagentc, "/info", "/target", windowsDirectory);
+        ProcessExecutionResult result = await ProcessExecutionRunner.RunAsync(
+            reagentc,
+            new[] { "/info", "/target", windowsDirectory },
+            cancellationToken).ConfigureAwait(false);
         string combined = result.CombinedOutput;
 
         Match match = RecoveryLocationRegex.Match(combined);
@@ -153,6 +175,40 @@ public sealed class WinReStagingService
         };
     }
 
+    private static async Task CopyFileAsync(
+        string source,
+        string destination,
+        CancellationToken cancellationToken)
+    {
+        const int BufferSize = 1024 * 1024;
+        await using FileStream sourceStream = new(
+            source,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            BufferSize,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        await using FileStream destinationStream = new(
+            destination,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.None,
+            BufferSize,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+        try
+        {
+            await sourceStream.CopyToAsync(destinationStream, BufferSize, cancellationToken).ConfigureAwait(false);
+            await destinationStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            try { destinationStream.Close(); } catch { }
+            try { File.Delete(destination); } catch { }
+            throw;
+        }
+    }
+
     private static string NormalizeRecoveryRelativePath(string relativePath)
     {
         string path = (relativePath ?? string.Empty).Trim();
@@ -160,37 +216,6 @@ public sealed class WinReStagingService
             return @"\Recovery\WindowsRE";
 
         return path.TrimEnd('\\');
-    }
-
-    private static ProcessResult RunProcess(string fileName, params string[] arguments)
-    {
-        System.Diagnostics.ProcessStartInfo startInfo = new()
-        {
-            FileName = fileName,
-            WorkingDirectory = Path.GetDirectoryName(fileName) ?? Environment.SystemDirectory,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-        foreach (string argument in arguments)
-            startInfo.ArgumentList.Add(argument);
-
-        using System.Diagnostics.Process process = System.Diagnostics.Process.Start(startInfo)
-            ?? throw new InvalidOperationException($"Unable to start {Path.GetFileName(startInfo.FileName)}.");
-        Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
-        Task<string> errorTask = process.StandardError.ReadToEndAsync();
-        process.WaitForExit();
-        string output = outputTask.GetAwaiter().GetResult();
-        string error = errorTask.GetAwaiter().GetResult();
-        return new ProcessResult(process.ExitCode, output.Trim(), error.Trim());
-    }
-
-    private readonly record struct ProcessResult(int ExitCode, string StandardOutput, string StandardError)
-    {
-        public string CombinedOutput => string.Join(
-            Environment.NewLine,
-            new[] { StandardOutput, StandardError }.Where(static text => !string.IsNullOrWhiteSpace(text)));
     }
 
     private sealed class RecoveryLocationResult

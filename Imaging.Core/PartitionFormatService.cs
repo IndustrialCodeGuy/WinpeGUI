@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 
 namespace Imaging.Core;
@@ -59,10 +58,6 @@ public sealed class PartitionFormatService
         if (!SupportedFileSystems.Contains(fileSystem))
             return PartitionFormatResult.Failed($"The filesystem '{fileSystem}' is not supported for automatic formatting.");
 
-        string diskPartPath = Path.Combine(Environment.SystemDirectory, "diskpart.exe");
-        if (!File.Exists(diskPartPath))
-            return PartitionFormatResult.Failed("DiskPart.exe was not found under the active Windows system directory.");
-
         if (root.Length < 3 || root[1] != ':' || !char.IsLetter(root[0]))
         {
             return PartitionFormatResult.Failed(
@@ -82,6 +77,10 @@ public sealed class PartitionFormatService
                 Encoding.ASCII,
                 cancellationToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             return PartitionFormatResult.Failed(
@@ -89,7 +88,6 @@ public sealed class PartitionFormatService
                 "The target may be read-only or otherwise unavailable.\n\n" + ex.Message);
         }
 
-        string scriptPath = Path.Combine(Path.GetTempPath(), $"ImagingManager-Format-{Guid.NewGuid():N}.txt");
         string script =
             $"select volume {driveLetter}\r\n" +
             $"format quick fs={fileSystem} override\r\n" +
@@ -97,52 +95,15 @@ public sealed class PartitionFormatService
 
         try
         {
-            await File.WriteAllTextAsync(scriptPath, script, Encoding.ASCII, cancellationToken).ConfigureAwait(false);
-
-            ProcessStartInfo startInfo = new()
-            {
-                FileName = diskPartPath,
-                WorkingDirectory = Path.GetDirectoryName(diskPartPath) ?? Environment.SystemDirectory,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            startInfo.ArgumentList.Add("/s");
-            startInfo.ArgumentList.Add(scriptPath);
-
-            using Process process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Unable to start DiskPart.exe.");
-
-            Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
-            Task<string> errorTask = process.StandardError.ReadToEndAsync();
-
-            try
-            {
-                await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                try
-                {
-                    if (!process.HasExited)
-                        process.Kill(entireProcessTree: true);
-                }
-                catch { }
-
-                try { await process.WaitForExitAsync().ConfigureAwait(false); } catch { }
-                try { await Task.WhenAll(outputTask, errorTask).ConfigureAwait(false); } catch { }
-                throw;
-            }
-
-            string output = (await outputTask.ConfigureAwait(false)).Trim();
-            string error = (await errorTask.ConfigureAwait(false)).Trim();
-            if (process.ExitCode != 0)
+            ProcessExecutionResult result = await DiskPartRunner.RunAsync(script, cancellationToken).ConfigureAwait(false);
+            string output = result.StandardOutput;
+            string error = result.StandardError;
+            if (!result.Success)
             {
                 return PartitionFormatResult.Failed(
                     BuildFailure("DiskPart could not format the selected partition.", output, error),
-                    process.ExitCode,
-                    output);
+                    result.ExitCode,
+                    result.CombinedOutput);
             }
 
             // DiskPart script execution does not give us a sufficiently strong
@@ -156,22 +117,20 @@ public sealed class PartitionFormatService
                         $"DiskPart returned without reformatting the selected target volume {driveLetter}:.",
                         output,
                         error),
-                    process.ExitCode,
-                    output);
+                    result.ExitCode,
+                    result.CombinedOutput);
             }
 
             // Give WinPE a moment to refresh the newly formatted filesystem before DISM starts.
             for (int attempt = 0; attempt < 10 && !Directory.Exists(root); attempt++)
-            {
                 await Task.Delay(100, cancellationToken).ConfigureAwait(false);
-            }
 
             if (!Directory.Exists(root))
             {
                 return PartitionFormatResult.Failed(
                     "DiskPart completed, but the formatted target partition is no longer accessible at " + root,
-                    process.ExitCode,
-                    output);
+                    result.ExitCode,
+                    result.CombinedOutput);
             }
 
             try
@@ -181,29 +140,28 @@ public sealed class PartitionFormatService
                 {
                     return PartitionFormatResult.Failed(
                         $"The target partition reported filesystem '{actualFileSystem}' after formatting; '{fileSystem}' was expected.",
-                        process.ExitCode,
-                        output);
+                        result.ExitCode,
+                        result.CombinedOutput);
                 }
             }
             catch (Exception ex)
             {
                 return PartitionFormatResult.Failed(
                     "The target partition was formatted, but Imaging Manager could not verify the resulting filesystem.\n\n" + ex.Message,
-                    process.ExitCode,
-                    output);
+                    result.ExitCode,
+                    result.CombinedOutput);
             }
 
             return new PartitionFormatResult
             {
                 Success = true,
-                ExitCode = process.ExitCode,
-                Output = output,
+                ExitCode = result.ExitCode,
+                Output = result.CombinedOutput,
                 FileSystem = fileSystem
             };
         }
         finally
         {
-            try { File.Delete(scriptPath); } catch { }
             try { File.Delete(markerPath); } catch { }
         }
     }
