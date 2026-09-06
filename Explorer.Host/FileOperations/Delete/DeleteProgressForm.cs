@@ -1,4 +1,4 @@
-using Shared.Shell.Utilities;
+﻿using Shared.Shell.Utilities;
 using Shell.Core.FileTypes;
 using System.Globalization;
 using UiExplorerIconCache = Explorer.UI.Icons.ExplorerIconCache;
@@ -635,6 +635,7 @@ internal sealed class DeleteProgressForm : Form, IExplorerDeleteProgressSink
 
     private void ApplyConfirmDetails(string path, ConfirmDeleteItemKind itemKind)
     {
+        path ??= string.Empty;
         bool isDirectory = itemKind == ConfirmDeleteItemKind.Folder;
 
         _confirmDetailsActive = true;
@@ -652,26 +653,27 @@ internal sealed class DeleteProgressForm : Form, IExplorerDeleteProgressSink
             _lblConfirmType.Visible = false;
             _lblConfirmSize.Visible = false;
 
-            _lblConfirmModified.Text = "Date Created: " + FileOperationText.GetDateCreatedText(path);
+            _lblConfirmModified.Text = "Date Created: " + FileOperationText.GetDateCreatedText(path ?? string.Empty);
             _lblConfirmModified.Visible = true;
         }
         else
         {
-            _lblConfirmType.Text = "Type: " + GetFileTypeText(path);
-            _lblConfirmSize.Text = "Size: " + FileOperationText.GetSizeText(path);
-            _lblConfirmModified.Text = "Date Modified: " + FileOperationText.GetDateModifiedText(path);
+            _lblConfirmType.Text = "Type: " + GetFileTypeText(path ?? string.Empty);
+            _lblConfirmSize.Text = "Size: " + FileOperationText.GetSizeText(path ?? string.Empty);
+            _lblConfirmModified.Text = "Date Modified: " + FileOperationText.GetDateModifiedText(path ?? string.Empty);
 
             _lblConfirmType.Visible = true;
             _lblConfirmSize.Visible = true;
             _lblConfirmModified.Visible = true;
         }
 
-        SetConfirmIcon(path, isDirectory);
+        SetConfirmIcon(path ?? string.Empty, isDirectory);
     }
 
     private void SetConfirmIcon(string path, bool isDirectory)
     {
-        _confirmIconPath = path ?? string.Empty;
+        path ??= string.Empty;
+        _confirmIconPath = path;
         _confirmIconIsDirectory = isDirectory;
 
         Image? oldImage = _picConfirmIcon.Image;
