@@ -153,6 +153,10 @@ public sealed class ImagingPartitionInfo
 
 public sealed class ImagingPartitionStorageInfo
 {
+    public const string EfiSystemGptTypeGuid = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b";
+    public const string MicrosoftReservedGptTypeGuid = "e3c9e316-0b5c-4db8-817d-f92df00215ae";
+    public const string MicrosoftRecoveryGptTypeGuid = "de94bba4-06d1-4d40-a16a-bfd50179d6ac";
+
     public int DiskNumber { get; init; }
     public int PartitionNumber { get; init; }
     public string DriveLetter { get; init; } = string.Empty;
@@ -162,8 +166,19 @@ public sealed class ImagingPartitionStorageInfo
     public ulong SizeBytes { get; init; }
     public ulong OffsetBytes { get; init; }
     public string MbrType { get; init; } = string.Empty;
+    public string GptTypeGuid { get; init; } = string.Empty;
     public string GptType { get; init; } = string.Empty;
     public string Guid { get; init; } = string.Empty;
+
+    public bool IsEfiSystem =>
+        string.Equals(GptTypeGuid, EfiSystemGptTypeGuid, StringComparison.OrdinalIgnoreCase);
+
+    public bool IsMicrosoftReserved =>
+        string.Equals(GptTypeGuid, MicrosoftReservedGptTypeGuid, StringComparison.OrdinalIgnoreCase);
+
+    public bool IsMicrosoftRecovery =>
+        string.Equals(GptTypeGuid, MicrosoftRecoveryGptTypeGuid, StringComparison.OrdinalIgnoreCase);
+
     public bool? IsReadOnly { get; init; }
     public bool? IsOffline { get; init; }
     public bool? IsSystem { get; init; }

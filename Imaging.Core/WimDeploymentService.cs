@@ -190,7 +190,7 @@ public sealed class WimDeploymentService
         out string error)
     {
         ImagingPartitionInfo? efi = disk.Partitions.FirstOrDefault(static partition =>
-            partition.StorageInfo?.GptType.StartsWith("EFI System", StringComparison.OrdinalIgnoreCase) == true ||
+            partition.StorageInfo?.IsEfiSystem == true ||
             partition.Type.Contains("GPT: System", StringComparison.OrdinalIgnoreCase) ||
             partition.Type.Contains("EFI System", StringComparison.OrdinalIgnoreCase));
         if (efi != null)

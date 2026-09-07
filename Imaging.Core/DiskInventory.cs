@@ -150,7 +150,7 @@ public sealed class DiskInventory
                         LargestFreeExtentBytes = ReadUInt64(GetPropertyValueSafe(disk, "LargestFreeExtent")),
                         NumberOfPartitions = ReadUInt32(GetPropertyValueSafe(disk, "NumberOfPartitions")),
                         ProvisioningType = FormatProvisioningType(ReadNullableUInt16(GetPropertyValueSafe(disk, "ProvisioningType"))),
-                        OperationalStatus = FormatDiskOperationalStatus(ReadNullableUInt16(GetPropertyValueSafe(disk, "OperationalStatus"))),
+                        OperationalStatus = FormatDiskOperationalStatus(GetPropertyValueSafe(disk, "OperationalStatus")),
                         HealthStatus = FormatHealthStatus(ReadNullableUInt16(GetPropertyValueSafe(disk, "HealthStatus"))),
                         BusType = FormatBusType(ReadNullableUInt16(GetPropertyValueSafe(disk, "BusType"))),
                         PartitionStyle = FormatPartitionStyle(ReadNullableUInt16(GetPropertyValueSafe(disk, "PartitionStyle"))),
@@ -197,18 +197,21 @@ public sealed class DiskInventory
                     int storagePartitionNumber = ReadInt32(GetPropertyValueSafe(partition, "PartitionNumber"));
                     string driveLetter = ReadDriveLetter(GetPropertyValueSafe(partition, "DriveLetter"));
 
+                    string rawGptType = ReadString(GetPropertyValueSafe(partition, "GptType"));
+
                     result[(diskNumber, offset)] = new ImagingPartitionStorageInfo
                     {
                         DiskNumber = diskNumber,
                         PartitionNumber = storagePartitionNumber,
                         DriveLetter = driveLetter,
                         AccessPaths = ReadStringArray(GetPropertyValueSafe(partition, "AccessPaths")),
-                        OperationalStatus = FormatPartitionOperationalStatus(ReadNullableUInt16(GetPropertyValueSafe(partition, "OperationalStatus"))),
+                        OperationalStatus = FormatPartitionOperationalStatus(GetPropertyValueSafe(partition, "OperationalStatus")),
                         TransitionState = FormatPartitionTransitionState(ReadNullableUInt16(GetPropertyValueSafe(partition, "TransitionState"))),
                         SizeBytes = ReadUInt64(GetPropertyValueSafe(partition, "Size")),
                         OffsetBytes = offset,
                         MbrType = FormatMbrType(ReadNullableUInt16(GetPropertyValueSafe(partition, "MbrType"))),
-                        GptType = FormatGptType(ReadString(GetPropertyValueSafe(partition, "GptType"))),
+                        GptTypeGuid = NormalizeGptTypeGuid(rawGptType),
+                        GptType = FormatGptType(rawGptType),
                         Guid = ReadString(GetPropertyValueSafe(partition, "Guid")),
                         IsReadOnly = ReadNullableBoolean(GetPropertyValueSafe(partition, "IsReadOnly")),
                         IsOffline = ReadNullableBoolean(GetPropertyValueSafe(partition, "IsOffline")),
@@ -724,6 +727,36 @@ public sealed class DiskInventory
         catch { return null; }
     }
 
+    private static IReadOnlyList<ushort> ReadUInt16Values(object? value)
+    {
+        if (value == null)
+            return Array.Empty<ushort>();
+
+        if (value is ushort[] values)
+            return values;
+
+        if (value is Array array)
+        {
+            List<ushort> result = new(array.Length);
+            foreach (object? item in array)
+            {
+                try
+                {
+                    if (item != null)
+                        result.Add(Convert.ToUInt16(item, CultureInfo.InvariantCulture));
+                }
+                catch
+                {
+                }
+            }
+
+            return result;
+        }
+
+        ushort? single = ReadNullableUInt16(value);
+        return single.HasValue ? new[] { single.Value } : Array.Empty<ushort>();
+    }
+
     private static ulong ReadUInt64(object? value)
     {
         try { return value == null ? 0UL : Convert.ToUInt64(value, CultureInfo.InvariantCulture); }
@@ -772,9 +805,19 @@ public sealed class DiskInventory
         _ => $"Unknown ({value})"
     };
 
-    private static string FormatDiskOperationalStatus(ushort? value) => value switch
+    private static string FormatStatusValues(object? value, Func<ushort, string> formatter)
     {
-        null => string.Empty,
+        return string.Join(", ", ReadUInt16Values(value)
+            .Select(formatter)
+            .Where(static text => !string.IsNullOrWhiteSpace(text))
+            .Distinct(StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static string FormatDiskOperationalStatus(object? value) =>
+        FormatStatusValues(value, FormatDiskOperationalStatusValue);
+
+    private static string FormatDiskOperationalStatusValue(ushort value) => value switch
+    {
         0 => "Unknown",
         1 => "Other",
         2 => "OK",
@@ -851,9 +894,11 @@ public sealed class DiskInventory
         _ => $"Unknown ({value})"
     };
 
-    private static string FormatPartitionOperationalStatus(ushort? value) => value switch
+    private static string FormatPartitionOperationalStatus(object? value) =>
+        FormatStatusValues(value, FormatPartitionOperationalStatusValue);
+
+    private static string FormatPartitionOperationalStatusValue(ushort value) => value switch
     {
-        null => string.Empty,
         0 => "Unknown",
         1 => "Online",
         3 => "No media",
@@ -887,12 +932,20 @@ public sealed class DiskInventory
         _ => $"0x{value:X2}"
     };
 
+    private static string NormalizeGptTypeGuid(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        return value.Trim().Trim('{', '}').ToLowerInvariant();
+    }
+
     private static string FormatGptType(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
             return string.Empty;
 
-        string normalized = value.Trim().Trim('{', '}').ToLowerInvariant();
+        string normalized = NormalizeGptTypeGuid(value);
         string name = normalized switch
         {
             "c12a7328-f81f-11d2-ba4b-00a0c93ec93b" => "EFI System",
