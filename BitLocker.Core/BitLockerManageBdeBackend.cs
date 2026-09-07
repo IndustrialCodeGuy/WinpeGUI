@@ -262,28 +262,13 @@ public sealed class BitLockerManageBdeBackend
 
     private static string ResolveManageBdePath()
     {
-        string? systemRoot = Environment.GetEnvironmentVariable("SystemRoot");
-
-        List<string> candidates = new();
-
-        if (!string.IsNullOrWhiteSpace(Environment.SystemDirectory))
-            candidates.Add(Path.Combine(Environment.SystemDirectory, "manage-bde.exe"));
-
-        if (!string.IsNullOrWhiteSpace(systemRoot))
-        {
-            candidates.Add(Path.Combine(systemRoot, "Sysnative", "manage-bde.exe"));
-            candidates.Add(Path.Combine(systemRoot, "System32", "manage-bde.exe"));
-        }
-
-        foreach (string candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            if (File.Exists(candidate))
-                return candidate;
-        }
+        string manageBdePath = Path.Combine(Environment.SystemDirectory, "manage-bde.exe");
+        if (File.Exists(manageBdePath))
+            return manageBdePath;
 
         throw new FileNotFoundException(
             "manage-bde.exe was not found. Expected it under the active Windows System32 directory.",
-            "manage-bde.exe");
+            manageBdePath);
     }
 
     // Read both streams asynchronously before collecting the exit code so a
