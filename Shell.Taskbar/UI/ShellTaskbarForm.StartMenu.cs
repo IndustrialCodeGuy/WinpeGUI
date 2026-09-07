@@ -339,23 +339,13 @@ namespace Shell.Taskbar.UI
 
         private static string? TryGetPowerShellPath()
         {
-            string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-            string system = Environment.GetFolderPath(Environment.SpecialFolder.System);
+            string powershellPath = Path.Combine(
+                Environment.SystemDirectory,
+                "WindowsPowerShell",
+                "v1.0",
+                "powershell.exe");
 
-            string[] candidates =
-            {
-                Path.Combine(system, "WindowsPowerShell", "v1.0", "powershell.exe"),
-                Path.Combine(windows, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
-                Path.Combine(windows, "Sysnative", "WindowsPowerShell", "v1.0", "powershell.exe")
-            };
-
-            foreach (string candidate in candidates)
-            {
-                if (File.Exists(candidate))
-                    return candidate;
-            }
-
-            return null;
+            return File.Exists(powershellPath) ? powershellPath : null;
         }
 
         private void LaunchProcess(string exe, string? args)
