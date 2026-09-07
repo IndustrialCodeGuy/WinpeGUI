@@ -25,15 +25,6 @@ namespace Shared.Shell.Utilities
             }
             catch { }
 
-            // 3) Heuristic fallback: X:\Windows
-            try
-            {
-                var sysRoot = Environment.GetEnvironmentVariable("SystemRoot") ?? "";
-                if (sysRoot.StartsWith(@"X:\Windows", StringComparison.OrdinalIgnoreCase))
-                    return true;
-            }
-            catch { }
-
             return false;
         }
     }

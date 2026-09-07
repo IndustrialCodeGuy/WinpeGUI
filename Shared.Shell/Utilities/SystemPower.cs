@@ -27,35 +27,20 @@ namespace Shared.Shell.Utilities
 
         public static ProcessStartInfo BuildSystemPowerStartInfo(bool reboot)
         {
-            string systemDirectory = Environment.GetFolderPath(Environment.SpecialFolder.System);
-
-            if (string.IsNullOrWhiteSpace(systemDirectory))
-            {
-                string windowsDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-                if (!string.IsNullOrWhiteSpace(windowsDirectory))
-                    systemDirectory = Path.Combine(windowsDirectory, "System32");
-            }
-
-            if (string.IsNullOrWhiteSpace(systemDirectory))
-                systemDirectory = @"X:\Windows\System32";
-
+            string systemDirectory = Environment.SystemDirectory;
             string wpeutilPath = Path.Combine(systemDirectory, "wpeutil.exe");
-            if (PlatformDetect.IsWinPE && File.Exists(wpeutilPath))
+
+            if (!File.Exists(wpeutilPath))
             {
-                return new ProcessStartInfo
-                {
-                    FileName = wpeutilPath,
-                    Arguments = reboot ? "reboot" : "shutdown",
-                    WorkingDirectory = systemDirectory,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
+                throw new FileNotFoundException(
+                    "wpeutil.exe was not found under the active Windows system directory.",
+                    wpeutilPath);
             }
 
             return new ProcessStartInfo
             {
-                FileName = Path.Combine(systemDirectory, "shutdown.exe"),
-                Arguments = reboot ? "/r /t 0" : "/s /t 0",
+                FileName = wpeutilPath,
+                Arguments = reboot ? "reboot" : "shutdown",
                 WorkingDirectory = systemDirectory,
                 UseShellExecute = false,
                 CreateNoWindow = true
