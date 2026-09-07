@@ -131,18 +131,8 @@ internal static class MountedWimPowerGuard
 
     private static string? ResolveDismPath()
     {
-        string? systemRoot = Environment.GetEnvironmentVariable("SystemRoot");
-        string[] candidates =
-        {
-            Path.Combine(Environment.SystemDirectory, "dism.exe"),
-            string.IsNullOrWhiteSpace(systemRoot) ? string.Empty : Path.Combine(systemRoot, "Sysnative", "dism.exe"),
-            string.IsNullOrWhiteSpace(systemRoot) ? string.Empty : Path.Combine(systemRoot, "System32", "dism.exe")
-        };
-
-        return candidates
-            .Where(static path => !string.IsNullOrWhiteSpace(path))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault(File.Exists);
+        string dismPath = Path.Combine(Environment.SystemDirectory, "dism.exe");
+        return File.Exists(dismPath) ? dismPath : null;
     }
 
     private static void TryKill(Process process)

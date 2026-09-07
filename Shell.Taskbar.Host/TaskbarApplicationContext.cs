@@ -45,7 +45,6 @@ internal sealed class TaskbarApplicationContext : ApplicationContext
         _taskbar = taskbar;
         taskbar.Show();
 
-        _ = Task.Run(EnsureFileManagerRunning);
     }
 
     private void SessionOwnerExited()
@@ -100,14 +99,6 @@ internal sealed class TaskbarApplicationContext : ApplicationContext
             _taskbar = null;
 
         ExitThread();
-    }
-
-    private void EnsureFileManagerRunning()
-    {
-        if (ExplorerHostClient.TrySignalOpenWindow(new ExplorerLaunchRequest { HostOnly = true }, HostProbeTimeoutMs))
-            return;
-
-        TryStartFileManagerHidden(out _);
     }
 
     private void OpenFileManagerWindowThroughHost()
