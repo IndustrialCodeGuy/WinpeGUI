@@ -23,7 +23,7 @@ namespace Shared.Shell.Interop
     //
     // Notes / Debug tips:
     // - SendMessageTimeout is used with SMTO_ABORTIFHUNG and a short timeout to avoid hanging on bad windows.
-    // - GetClassLongPtr wrapper handles 32-bit vs 64-bit correctly (WinPE can be either depending on build).
+    // - This shell is x64-only, so GetClassLongPtr is bound directly to the native 64-bit API.
     // - If a window icon looks wrong or missing, check:
     //     1) WM_GETICON path (SendMessageTimeout result)
     //     2) class icon path (GetClassLongPtr)
@@ -234,18 +234,8 @@ namespace Shared.Shell.Interop
             uint uIDNewItem,
             string? lpNewItem);
 
-        public static IntPtr GetClassLongPtr(IntPtr hWnd, int nIndex)
-        {
-            if (IntPtr.Size == 8)
-                return GetClassLongPtr64(hWnd, nIndex);
-            return new IntPtr((int)GetClassLong32(hWnd, nIndex));
-        }
-
         [DllImport("user32.dll", EntryPoint = "GetClassLongPtr", SetLastError = true)]
-        private static extern IntPtr GetClassLongPtr64(IntPtr hWnd, int nIndex);
-
-        [DllImport("user32.dll", EntryPoint = "GetClassLong", SetLastError = true)]
-        private static extern uint GetClassLong32(IntPtr hWnd, int nIndex);
+        public static extern IntPtr GetClassLongPtr(IntPtr hWnd, int nIndex);
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         public static extern bool DeleteMenu(IntPtr hMenu, uint uPosition, uint uFlags);
