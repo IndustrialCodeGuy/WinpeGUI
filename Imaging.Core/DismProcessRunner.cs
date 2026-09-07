@@ -180,26 +180,12 @@ internal static class DismProcessRunner
 
     private static string ResolveDismPath()
     {
-        string? systemRoot = Environment.GetEnvironmentVariable("SystemRoot");
-        List<string> candidates = new();
-
-        if (!string.IsNullOrWhiteSpace(Environment.SystemDirectory))
-            candidates.Add(Path.Combine(Environment.SystemDirectory, "dism.exe"));
-
-        if (!string.IsNullOrWhiteSpace(systemRoot))
-        {
-            candidates.Add(Path.Combine(systemRoot, "Sysnative", "dism.exe"));
-            candidates.Add(Path.Combine(systemRoot, "System32", "dism.exe"));
-        }
-
-        foreach (string candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            if (File.Exists(candidate))
-                return candidate;
-        }
+        string dismPath = Path.Combine(Environment.SystemDirectory, "dism.exe");
+        if (File.Exists(dismPath))
+            return dismPath;
 
         throw new FileNotFoundException(
             "DISM.exe was not found under the active Windows system directory.",
-            "dism.exe");
+            dismPath);
     }
 }

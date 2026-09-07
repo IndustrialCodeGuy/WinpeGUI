@@ -19,10 +19,9 @@ public sealed class DiskInventory
         Dictionary<int, ImagingDiskStorageInfo> storageDisks = GetStorageDisksBestEffort(out string storageDiskError);
         Dictionary<(int DiskNumber, ulong OffsetBytes), ImagingPartitionStorageInfo> storagePartitions =
             GetStoragePartitionsBestEffort(out string storagePartitionError);
-        Dictionary<string, IReadOnlyList<string>> logicalDriveMap =
-            GetLogicalDriveMapBestEffort(out bool logicalDriveMapAvailable);
+        Dictionary<string, IReadOnlyList<string>> logicalDriveMap = GetLogicalDriveMapBestEffort();
         Dictionary<int, List<ImagingPartitionInfo>> partitionsByDisk =
-            GetPartitions(storagePartitions, logicalDriveMap, logicalDriveMapAvailable, volumesByRoot);
+            GetPartitions(storagePartitions, logicalDriveMap, volumesByRoot);
         List<ImagingDiskInfo> disks = new();
 
         using ManagementObjectSearcher searcher = new(
@@ -236,7 +235,6 @@ public sealed class DiskInventory
     private static Dictionary<int, List<ImagingPartitionInfo>> GetPartitions(
         IReadOnlyDictionary<(int DiskNumber, ulong OffsetBytes), ImagingPartitionStorageInfo> storagePartitions,
         IReadOnlyDictionary<string, IReadOnlyList<string>> logicalDriveMap,
-        bool logicalDriveMapAvailable,
         IReadOnlyDictionary<string, ImagingVolumeInfo> volumesByRoot)
     {
         Dictionary<int, List<ImagingPartitionInfo>> result = new();
@@ -262,8 +260,7 @@ public sealed class DiskInventory
                 IReadOnlyList<string> driveLetters = GetPartitionDriveLetters(
                     deviceId,
                     storageInfo,
-                    logicalDriveMap,
-                    logicalDriveMapAvailable);
+                    logicalDriveMap);
 
                 ImagingVolumeInfo[] partitionVolumes = driveLetters
                     .Select(root =>
@@ -308,8 +305,7 @@ public sealed class DiskInventory
     private static IReadOnlyList<string> GetPartitionDriveLetters(
         string partitionDeviceId,
         ImagingPartitionStorageInfo? storageInfo,
-        IReadOnlyDictionary<string, IReadOnlyList<string>> logicalDriveMap,
-        bool logicalDriveMapAvailable)
+        IReadOnlyDictionary<string, IReadOnlyList<string>> logicalDriveMap)
     {
         HashSet<string> roots = new(StringComparer.OrdinalIgnoreCase);
 
@@ -328,22 +324,12 @@ public sealed class DiskInventory
                 AddDriveRoot(roots, root);
         }
 
-        // Preserve the original per-partition association lookup only as a last
-        // resort when the bulk association class is unavailable in the current
-        // environment and MSFT_Partition did not provide a drive letter.
-        if (roots.Count == 0 && !logicalDriveMapAvailable)
-        {
-            foreach (string root in GetLogicalDrivesForPartition(partitionDeviceId))
-                AddDriveRoot(roots, root);
-        }
-
         return roots.OrderBy(static root => root, StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    private static Dictionary<string, IReadOnlyList<string>> GetLogicalDriveMapBestEffort(out bool available)
+    private static Dictionary<string, IReadOnlyList<string>> GetLogicalDriveMapBestEffort()
     {
         Dictionary<string, HashSet<string>> working = new(StringComparer.OrdinalIgnoreCase);
-        available = false;
 
         try
         {
@@ -372,11 +358,9 @@ public sealed class DiskInventory
                 }
             }
 
-            available = true;
         }
         catch
         {
-            available = false;
         }
 
         return working.ToDictionary(
@@ -563,33 +547,6 @@ public sealed class DiskInventory
         {
             return false;
         }
-    }
-
-    private static IReadOnlyList<string> GetLogicalDrivesForPartition(string partitionDeviceId)
-    {
-        if (string.IsNullOrWhiteSpace(partitionDeviceId))
-            return Array.Empty<string>();
-
-        string escaped = partitionDeviceId.Replace("\\", "\\\\", StringComparison.Ordinal)
-            .Replace("\"", "\\\"", StringComparison.Ordinal);
-        string query = $"ASSOCIATORS OF {{Win32_DiskPartition.DeviceID=\"{escaped}\"}} WHERE AssocClass = Win32_LogicalDiskToPartition";
-        List<string> drives = new();
-
-        using ManagementObjectSearcher searcher = new(@"root\CIMV2", query);
-        using ManagementObjectCollection logicalDisks = searcher.Get();
-
-        foreach (ManagementObject logicalDisk in logicalDisks.Cast<ManagementObject>())
-        {
-            using (logicalDisk)
-            {
-                string drive = Convert.ToString(logicalDisk["DeviceID"])?.Trim() ?? string.Empty;
-                string normalized = ImagingPath.NormalizeDriveRoot(drive);
-                if (normalized.Length > 0)
-                    drives.Add(normalized);
-            }
-        }
-
-        return drives.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(static d => d).ToArray();
     }
 
     private static BitLockerStatusSnapshot GetBitLockerVolumesBestEffort()
