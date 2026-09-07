@@ -30,8 +30,6 @@ internal static class Program
     // owned by Shell.Taskbar.Host now; launcher-triggered power is only retained
     // for guarded fatal-startup/crash-storm cases.
 
-    private const int ExitShutdown = 0;
-    private const int ExitReboot = 2;
     private const int PowerCommandWaitMs = 15_000;
     private const int SupervisorPollMs = 250;
 
@@ -180,7 +178,6 @@ internal static class Program
             path: shellPath,
             args: shellArgs,
             restart: true,
-            powerExitCodes: false,
             probeFileManager: false);
 
         SupervisedProcess? fileManager = CreateFileManagerProcess(launcherDir, settings);
@@ -248,17 +245,6 @@ internal static class Program
             int? shellExitCode = TryConsumeExitedProcess(shell, out long shellRunMs);
             if (shellExitCode.HasValue)
             {
-                if (shell.UsesPowerExitCodes && (shellExitCode.Value == ExitShutdown || shellExitCode.Value == ExitReboot))
-                {
-                    bool reboot = shellExitCode.Value == ExitReboot;
-
-                    SafeAppend(logPath,
-                        $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] Shell clean exit -> {(reboot ? "reboot" : "shutdown")}. " +
-                        $"exitCode={shellExitCode.Value}, runMs={shellRunMs}, systemUp={FormatMs(systemUpMs)} ({systemUpMs}ms){Environment.NewLine}");
-
-                    return RequestPowerActionOrHold(reboot, logPath);
-                }
-
                 bool crashStorm = RegisterProcessFailure(
                     shell,
                     crashBurstLimit,
@@ -308,7 +294,6 @@ internal static class Program
             path: ResolveShellPath(launcherDir, hostPathSetting),
             args: hostArgs,
             restart: restart,
-            powerExitCodes: false,
             probeFileManager: true);
     }
 
@@ -494,14 +479,12 @@ internal static class Program
             string path,
             string args,
             bool restart,
-            bool powerExitCodes,
             bool probeFileManager)
         {
             Role = role;
             Path = path;
             Args = args;
             Restart = restart;
-            UsesPowerExitCodes = powerExitCodes;
             ProbeFileManager = probeFileManager;
         }
 
@@ -509,7 +492,6 @@ internal static class Program
         public string Path { get; }
         public string Args { get; }
         public bool Restart { get; }
-        public bool UsesPowerExitCodes { get; }
         public bool ProbeFileManager { get; }
         public Process? Process { get; set; }
         public DateTime LastStartUtc { get; set; } = DateTime.UtcNow;
@@ -598,7 +580,7 @@ internal static class Program
             $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] Power command accepted; holding launcher process while system {(reboot ? "reboots" : "shuts down")}.{Environment.NewLine}");
 
         Thread.Sleep(Timeout.Infinite);
-        return reboot ? ExitReboot : ExitShutdown;
+        return 0;
     }
 
     private static bool IsRunningInWinPE()
@@ -623,15 +605,7 @@ internal static class Program
         }
         catch { }
 
-        try
-        {
-            string systemRoot = Environment.GetEnvironmentVariable("SystemRoot") ?? string.Empty;
-            return systemRoot.StartsWith(@"X:\Windows", StringComparison.OrdinalIgnoreCase);
-        }
-        catch
-        {
-            return false;
-        }
+        return false;
     }
 
     private static bool TryRequestPowerAction(bool reboot, string logPath, out string? error)
@@ -668,35 +642,20 @@ internal static class Program
 
     private static ProcessStartInfo BuildSystemPowerStartInfo(bool reboot)
     {
-        string systemDirectory = Environment.GetFolderPath(Environment.SpecialFolder.System);
-
-        if (string.IsNullOrWhiteSpace(systemDirectory))
-        {
-            string windowsDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-            if (!string.IsNullOrWhiteSpace(windowsDirectory))
-                systemDirectory = Path.Combine(windowsDirectory, "System32");
-        }
-
-        if (string.IsNullOrWhiteSpace(systemDirectory))
-            systemDirectory = @"X:\Windows\System32";
-
+        string systemDirectory = Environment.SystemDirectory;
         string wpeutilPath = Path.Combine(systemDirectory, "wpeutil.exe");
-        if (File.Exists(wpeutilPath))
+
+        if (!File.Exists(wpeutilPath))
         {
-            return new ProcessStartInfo
-            {
-                FileName = wpeutilPath,
-                Arguments = reboot ? "reboot" : "shutdown",
-                WorkingDirectory = systemDirectory,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
+            throw new FileNotFoundException(
+                "wpeutil.exe was not found under the active Windows system directory.",
+                wpeutilPath);
         }
 
         return new ProcessStartInfo
         {
-            FileName = Path.Combine(systemDirectory, "shutdown.exe"),
-            Arguments = reboot ? "/r /t 0" : "/s /t 0",
+            FileName = wpeutilPath,
+            Arguments = reboot ? "reboot" : "shutdown",
             WorkingDirectory = systemDirectory,
             UseShellExecute = false,
             CreateNoWindow = true

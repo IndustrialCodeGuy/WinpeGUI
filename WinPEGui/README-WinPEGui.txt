@@ -8,9 +8,9 @@ winpeshl.ini. It starts Shell.Taskbar.Host.exe and FileManager.exe -host as
 separate processes so the taskbar UI is not on the file-manager UI thread. It
 restarts either process after non-clean exits.
 
-The taskbar host still has a small fallback that can start/ensure
-FileManager.exe -host if it is launched manually without WinPEGui, but
-normal WinPE startup should let WinPEGui supervise both processes.
+The taskbar host can still start FileManager.exe -host on demand if the user
+selects File Manager and no file-manager host is available, but normal WinPE
+startup lets WinPEGui supervise both processes.
 
 Default processes
 -----------------
@@ -26,16 +26,11 @@ paths.
 
 Power handling
 --------------
-The taskbar host directly starts wpeutil.exe/shutdown.exe for Shutdown
-and Reboot. The launcher also retains the legacy exit-code contract:
-
-    0 = shutdown
-    2 = reboot
-
-When the launcher sees one of those clean shell exit codes, it starts the actual
-power command itself and then keeps running while the system powers off/reboots.
-This avoids the old WinPE behavior where returning from the shell/launcher could
-let winpeshl.exe reboot the environment even for a shutdown request.
+The taskbar host directly starts the native WinPE wpeutil.exe for Shutdown and
+Reboot. The launcher also uses wpeutil.exe for guarded fatal-startup and
+crash-storm shutdown requests, then keeps running while the system powers off.
+This avoids returning control to winpeshl.exe before the requested power action
+has taken effect.
 
 Configuration
 -------------
