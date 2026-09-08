@@ -3,7 +3,6 @@ using Shared.Shell.Theming;
 using Shared.Shell.Utilities;
 using Shell.Core.Host;
 using Shell.Core.Models;
-using Shell.Infrastructure.DriveState;
 using Shell.Taskbar.UI;
 using System.Diagnostics;
 
@@ -31,10 +30,9 @@ internal sealed class TaskbarApplicationContext : ApplicationContext
         if (sessionOwnerProcessId > 0)
             SessionOwnerMonitor.Start(sessionOwnerProcessId, SessionOwnerExited);
 
-        BitLockerRuntimeCapabilities bitLockerCapabilities = BitLockerRuntimeCapabilities.Detect();
-
+        bool showBitLockerManagerStartMenu = File.Exists(Path.Combine(AppContext.BaseDirectory, "BitLocker.Manager.exe"));
         bool showImagingManagerStartMenu = File.Exists(Path.Combine(AppContext.BaseDirectory, "Imaging.Manager.exe"));
-        ShellTaskbarForm taskbar = new(bitLockerCapabilities.CanShowBitLockerManagerStartMenu, showImagingManagerStartMenu);
+        ShellTaskbarForm taskbar = new(showBitLockerManagerStartMenu, showImagingManagerStartMenu);
         taskbar.OpenExplorerRequested += Taskbar_OpenExplorerRequested;
         taskbar.BitLockerManagerRequested += Taskbar_BitLockerManagerRequested;
         taskbar.ImagingManagerRequested += Taskbar_ImagingManagerRequested;
