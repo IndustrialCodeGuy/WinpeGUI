@@ -28,8 +28,6 @@ internal sealed class ExplorerApplicationContext : ApplicationContext, IExplorer
 {
     private readonly SynchronizationContext _uiContext;
 
-    private readonly BitLockerRuntimeCapabilities _bitLockerCapabilities;
-    private readonly bool _canUseDriveDeviceWmiMapping;
     private readonly DriveStateManager _sharedDriveStateManager;
     private readonly DriveStateBuilder _driveStateBuilder;
     private readonly DriveStateStore _driveStateStore;
@@ -56,9 +54,7 @@ internal sealed class ExplorerApplicationContext : ApplicationContext, IExplorer
         _uiContext = SynchronizationContext.Current
             ?? throw new InvalidOperationException("WindowsFormsSynchronizationContext was not available.");
 
-        _bitLockerCapabilities = BitLockerRuntimeCapabilities.Detect();
-        _canUseDriveDeviceWmiMapping = DetectDriveDeviceWmiMapping();
-        _sharedDriveStateManager = new DriveStateManager(_bitLockerCapabilities);
+        _sharedDriveStateManager = new DriveStateManager();
         _driveStateBuilder = new DriveStateBuilder(_sharedDriveStateManager);
         _driveStateStore = new DriveStateStore(_driveStateBuilder);
         _fileAssociations = new ExplorerFileAssociationService();
@@ -68,7 +64,7 @@ internal sealed class ExplorerApplicationContext : ApplicationContext, IExplorer
 
         _windowRegistry = new ExplorerWindowRegistry();
         _refreshCoordinator = new RefreshCoordinator(_driveStateStore, _windowRegistry);
-        _storageChangeCoordinator = new StorageChangeCoordinator(_uiContext, _bitLockerCapabilities.IsAvailable);
+        _storageChangeCoordinator = new StorageChangeCoordinator(_uiContext);
         _iconCache = new ExplorerIconCache();
         _iconCache.WarmCoreImages(SystemInformation.SmallIconSize.Width);
 
@@ -248,11 +244,9 @@ internal sealed class ExplorerApplicationContext : ApplicationContext, IExplorer
         }
     }
 
-    public bool CanUseExplorerBitLockerUi => _bitLockerCapabilities.CanUseExplorerBitLockerUi;
-
     public bool CanEjectDriveDevice(string driveRoot)
     {
-        if (!_canUseDriveDeviceWmiMapping || string.IsNullOrWhiteSpace(driveRoot))
+        if (string.IsNullOrWhiteSpace(driveRoot))
             return false;
 
         try
@@ -261,27 +255,6 @@ internal sealed class ExplorerApplicationContext : ApplicationContext, IExplorer
 
             return TryResolveDriveDevice(normalizedRoot, out string pnpDeviceId) &&
                 IsDriveDeviceEjectCandidate(pnpDeviceId);
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static bool DetectDriveDeviceWmiMapping()
-    {
-        try
-        {
-            using ManagementClass logicalDiskToPartition = new("Win32_LogicalDiskToPartition");
-            logicalDiskToPartition.Get();
-
-            using ManagementClass diskDriveToDiskPartition = new("Win32_DiskDriveToDiskPartition");
-            diskDriveToDiskPartition.Get();
-
-            using ManagementClass diskDrive = new("Win32_DiskDrive");
-            diskDrive.Get();
-
-            return true;
         }
         catch
         {
@@ -1367,35 +1340,14 @@ internal sealed class ExplorerApplicationContext : ApplicationContext, IExplorer
             DriveIssueKind.NotReady or DriveIssueKind.RemovableNoMediaOrUnavailable =>
                 ("Drive Not Ready", $"The drive is not ready:\n{normalizedRoot}\n\nInsert media or check that the device is connected."),
 
-            DriveIssueKind.BitLockerStatusUnavailableNotElevated =>
-                ("Drive Not Ready", $"The drive is not ready:\n{normalizedRoot}\n\nRun File Manager as administrator to check or unlock BitLocker-protected drives."),
-
-            DriveIssueKind.BitLockerStatusProviderUnavailable =>
-                ("Drive Not Ready", $"The drive is not ready:\n{normalizedRoot}\n\nThis WinPE image is missing the required BitLocker/SecureStartup components to unlock it here."),
-
-            DriveIssueKind.BitLockerStatusCheckFailed =>
-                ("Drive Not Ready", $"The drive is not ready:\n{normalizedRoot}\n\nBitLocker status could not be checked in this environment."),
-
             _ =>
                 ("Drive Not Ready", $"The drive is not ready:\n{normalizedRoot}\n\nThe device may be disconnected, unavailable, unformatted, or reporting an I/O error.")
         };
     }
 
-    private string BuildBitLockerLockedMessage(string normalizedRoot)
+    private static string BuildBitLockerLockedMessage(string normalizedRoot)
     {
-        string detail = _bitLockerCapabilities.State switch
-        {
-            BitLockerIntegrationState.NotElevated =>
-                "Run File Manager as administrator to check or unlock BitLocker-protected drives.",
-
-            BitLockerIntegrationState.ProviderUnavailable =>
-                "This WinPE image is missing the required BitLocker/SecureStartup components to unlock it here.",
-
-            _ =>
-                "Unlock the drive to access its contents."
-        };
-
-        return $"The drive appears to be locked by BitLocker:\n{normalizedRoot}\n\n{detail}";
+        return $"The drive appears to be locked by BitLocker:\n{normalizedRoot}\n\nUnlock the drive to access its contents.";
     }
 
     public void LaunchBitLockerHelper(
@@ -1405,12 +1357,6 @@ internal sealed class ExplorerApplicationContext : ApplicationContext, IExplorer
         string? navigationWindowId = null,
         bool openInNewWindowAfterUnlock = false)
     {
-        if (!_bitLockerCapabilities.CanUseExplorerBitLockerUi)
-        {
-            ShowDriveNotReadyMessage(driveRoot);
-            return;
-        }
-
         string fileName = action == ExplorerBitLockerAction.Unlock
             ? "BitLocker.Unlock.exe"
             : "BitLocker.Manager.exe";
