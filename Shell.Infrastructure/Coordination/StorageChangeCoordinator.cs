@@ -31,21 +31,19 @@ public sealed class StorageChangeEventArgs : EventArgs
 public sealed class StorageChangeCoordinator : IDisposable
 {
     private readonly DriveTopologyMonitor _driveTopologyMonitor;
-    private readonly BitLockerStateMonitor? _bitLockerStateMonitor;
+    private readonly BitLockerStateMonitor _bitLockerStateMonitor;
     private bool _started;
     private bool _disposed;
 
-    public StorageChangeCoordinator(SynchronizationContext uiContext, bool monitorBitLocker)
+    public StorageChangeCoordinator(SynchronizationContext uiContext)
     {
         ArgumentNullException.ThrowIfNull(uiContext);
 
         _driveTopologyMonitor = new DriveTopologyMonitor(uiContext);
-        if (monitorBitLocker)
-            _bitLockerStateMonitor = new BitLockerStateMonitor(uiContext);
+        _bitLockerStateMonitor = new BitLockerStateMonitor(uiContext);
 
         _driveTopologyMonitor.TopologyChanged += DriveTopologyMonitor_TopologyChanged;
-        if (_bitLockerStateMonitor is not null)
-            _bitLockerStateMonitor.BitLockerStateChanged += BitLockerStateMonitor_BitLockerStateChanged;
+        _bitLockerStateMonitor.BitLockerStateChanged += BitLockerStateMonitor_BitLockerStateChanged;
     }
 
     public event EventHandler<StorageChangeEventArgs>? StorageChanged;
@@ -60,7 +58,7 @@ public sealed class StorageChangeCoordinator : IDisposable
 
         _started = true;
         _driveTopologyMonitor.Start();
-        _bitLockerStateMonitor?.Start();
+        _bitLockerStateMonitor.Start();
     }
 
     private void DriveTopologyMonitor_TopologyChanged(object? sender, RefreshReason reason)
@@ -86,10 +84,9 @@ public sealed class StorageChangeCoordinator : IDisposable
 
         _disposed = true;
         _driveTopologyMonitor.TopologyChanged -= DriveTopologyMonitor_TopologyChanged;
-        if (_bitLockerStateMonitor is not null)
-            _bitLockerStateMonitor.BitLockerStateChanged -= BitLockerStateMonitor_BitLockerStateChanged;
+        _bitLockerStateMonitor.BitLockerStateChanged -= BitLockerStateMonitor_BitLockerStateChanged;
 
-        _bitLockerStateMonitor?.Dispose();
+        _bitLockerStateMonitor.Dispose();
         _driveTopologyMonitor.Dispose();
     }
 }
