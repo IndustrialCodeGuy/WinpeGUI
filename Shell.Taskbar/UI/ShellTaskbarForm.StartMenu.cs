@@ -176,18 +176,15 @@ namespace Shell.Taskbar.UI
                 "/k",
                 Icons.FromStartPath(commandPromptPath, rootPx)));
 
-            string? powerShellPath = TryGetPowerShellPath();
+            string powerShellPath = GetPowerShellPath();
 
-            if (!string.IsNullOrEmpty(powerShellPath))
-            {
-                menu.Items.Add(MakeStartMenuSeparator());
+            menu.Items.Add(MakeStartMenuSeparator());
 
-                menu.Items.Add(MakeExeMenuItem(
-                    "PowerShell",
-                    powerShellPath,
-                    "-NoLogo -NoExit",
-                    Icons.FromStartPath(powerShellPath, rootPx)));
-            }
+            menu.Items.Add(MakeExeMenuItem(
+                "PowerShell",
+                powerShellPath,
+                "-NoLogo -NoExit",
+                Icons.FromStartPath(powerShellPath, rootPx)));
 
             menu.Items.Add(MakeStartMenuSeparator());
 
@@ -337,15 +334,13 @@ namespace Shell.Taskbar.UI
             return File.Exists(systemPath) ? systemPath : exe;
         }
 
-        private static string? TryGetPowerShellPath()
+        private static string GetPowerShellPath()
         {
-            string powershellPath = Path.Combine(
+            return Path.Combine(
                 Environment.SystemDirectory,
                 "WindowsPowerShell",
                 "v1.0",
                 "powershell.exe");
-
-            return File.Exists(powershellPath) ? powershellPath : null;
         }
 
         private void LaunchProcess(string exe, string? args)
