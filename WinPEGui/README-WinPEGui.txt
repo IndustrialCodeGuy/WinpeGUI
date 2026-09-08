@@ -24,6 +24,27 @@ WinPEGui.settings.json, Shell.Taskbar.Host.exe, and FileManager.exe in
 the same shell folder or edit WinPEGui.settings.json to use the desired
 paths.
 
+Required WinPE profile
+----------------------
+When running in WinPE, WinPEGui validates the supported optional-component
+profile before starting the taskbar and file-manager hosts. The release image
+is expected to include:
+
+    WinPE-WMI
+    WinPE-NetFX
+    WinPE-Scripting
+    WinPE-PowerShell
+    WinPE-StorageWMI
+    WinPE-SecureStartup
+
+The validation checks base WMI, manage-bde.exe and the BitLocker WMI provider,
+PowerShell, and the MSFT_Disk/MSFT_Partition Storage WMI providers. If the
+profile is incomplete or unusable, WinPEGui displays a configuration error,
+logs the failure, and does not start a reduced-function shell.
+
+Full-Windows development runs do not perform this WinPE-image requirements
+check.
+
 Power handling
 --------------
 The taskbar host directly starts the native WinPE wpeutil.exe for Shutdown and

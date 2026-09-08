@@ -1,6 +1,7 @@
 ﻿using Shell.Core.Host;
 using System.Diagnostics;
 using System.Text.Json;
+using System.Runtime.InteropServices;
 
 namespace WinPEGui;
 
@@ -110,6 +111,25 @@ internal static class Program
             SafeAppend(logPath,
                 $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] Settings load failed. {settingsLoadError} " +
                 $"Using built-in defaults where possible.{Environment.NewLine}");
+        }
+
+        if (IsRunningInWinPE())
+        {
+            IReadOnlyList<WinPeRequirementFailure> requirementFailures = WinPeRequirements.Validate();
+            if (requirementFailures.Count > 0)
+            {
+                string requirementMessage = WinPeRequirements.BuildFailureMessage(requirementFailures);
+
+                SafeAppend(logPath,
+                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] Required WinPE component validation failed.{Environment.NewLine}" +
+                    requirementMessage + Environment.NewLine);
+
+                ShowFatalConfigurationError(requirementMessage);
+                return RequestPowerActionOrHold(reboot: false, logPath);
+            }
+
+            SafeAppend(logPath,
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] Required WinPE component validation passed.{Environment.NewLine}");
         }
 
         if (string.IsNullOrWhiteSpace(shellSettingPath))
@@ -550,6 +570,28 @@ internal static class Program
 
             try { process.Dispose(); }
             catch { }
+        }
+    }
+
+    private const uint MbOk = 0x00000000;
+    private const uint MbIconError = 0x00000010;
+    private const uint MbSetForeground = 0x00010000;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int MessageBoxW(IntPtr hWnd, string lpText, string lpCaption, uint uType);
+
+    private static void ShowFatalConfigurationError(string message)
+    {
+        try
+        {
+            _ = MessageBoxW(
+                IntPtr.Zero,
+                message,
+                "WinPE GUI - Required Components",
+                MbOk | MbIconError | MbSetForeground);
+        }
+        catch
+        {
         }
     }
 
