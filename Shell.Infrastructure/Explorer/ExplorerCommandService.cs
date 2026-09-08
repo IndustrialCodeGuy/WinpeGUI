@@ -75,15 +75,6 @@ public sealed class ExplorerCommandService : IExplorerCommandService
 
                     if (context.IsLocked == true)
                     {
-                        if (!_commands.CanUseExplorerBitLockerUi)
-                        {
-                            _commands.ShowDriveNotReadyMessage(
-                            context.TargetPath,
-                            context.IssueKind,
-                            context.IssueMessage);
-                            return true;
-                        }
-
                         _commands.LaunchBitLockerHelper(
                         context.TargetPath,
                         ExplorerBitLockerAction.Unlock,
@@ -183,7 +174,7 @@ public sealed class ExplorerCommandService : IExplorerCommandService
                 if (!context.HasTargetPath)
                     return false;
 
-                if (!context.CanUseExplorerBitLockerUi || !TryGetBitLockerContextAction(
+                if (!TryGetBitLockerContextAction(
                     context.IsReady,
                     context.IsLocked,
                     context.IsBitLockerProtected,
@@ -300,7 +291,7 @@ public sealed class ExplorerCommandService : IExplorerCommandService
             ExplorerMenuItemModel.Separator()
         ];
 
-        if (context.CanUseExplorerBitLockerUi && TryGetBitLockerContextAction(
+        if (TryGetBitLockerContextAction(
             context.IsReady,
             context.IsLocked,
             context.IsBitLockerProtected,
