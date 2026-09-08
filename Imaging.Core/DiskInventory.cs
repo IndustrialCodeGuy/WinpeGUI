@@ -16,9 +16,9 @@ public sealed class DiskInventory
         IReadOnlyList<BitLockerVolumeInfo> bitLockerVolumes = bitLockerStatus.Volumes;
         Dictionary<string, ImagingVolumeInfo> volumesByRoot = GetDriveVolumesBestEffort();
 
-        Dictionary<int, ImagingDiskStorageInfo> storageDisks = GetStorageDisksBestEffort(out string storageDiskError);
+        Dictionary<int, ImagingDiskStorageInfo> storageDisks = GetStorageDisks();
         Dictionary<(int DiskNumber, ulong OffsetBytes), ImagingPartitionStorageInfo> storagePartitions =
-            GetStoragePartitionsBestEffort(out string storagePartitionError);
+            GetStoragePartitions();
         Dictionary<string, IReadOnlyList<string>> logicalDriveMap = GetLogicalDriveMapBestEffort();
         Dictionary<int, List<ImagingPartitionInfo>> partitionsByDisk =
             GetPartitions(storagePartitions, logicalDriveMap, volumesByRoot);
@@ -79,13 +79,9 @@ public sealed class DiskInventory
                     SizeBytes = sizeBytes,
                     IsOffline = storageInfo?.IsOffline,
                     StorageInfo = storageInfo,
-                    StorageInfoAvailable = storageInfo != null,
-                    StorageInfoError = storageDiskError,
-                    PartitionStorageInfoAvailable = string.IsNullOrWhiteSpace(storagePartitionError),
-                    PartitionStorageInfoError = storagePartitionError,
                     Partitions = partitions.OrderBy(static p => p.PartitionNumber).ToArray(),
                     BitLockerVolumes = diskBitLockerVolumes,
-                    BitLockerStatusAvailable = bitLockerStatus.Available,
+                    BitLockerStatusQuerySucceeded = bitLockerStatus.QuerySucceeded,
                     BitLockerStatusError = bitLockerStatus.Error
                 });
             }
@@ -114,119 +110,101 @@ public sealed class DiskInventory
         return disks.FirstOrDefault(d => d.ContainsDrive(root));
     }
 
-    private static Dictionary<int, ImagingDiskStorageInfo> GetStorageDisksBestEffort(out string error)
+    private static Dictionary<int, ImagingDiskStorageInfo> GetStorageDisks()
     {
         Dictionary<int, ImagingDiskStorageInfo> result = new();
-        error = string.Empty;
 
-        try
+        using ManagementObjectSearcher searcher = new(
+            @"root\Microsoft\Windows\Storage",
+            "SELECT * FROM MSFT_Disk");
+        using ManagementObjectCollection disks = searcher.Get();
+
+        foreach (ManagementObject disk in disks.Cast<ManagementObject>())
         {
-            using ManagementObjectSearcher searcher = new(
-                @"root\Microsoft\Windows\Storage",
-                "SELECT * FROM MSFT_Disk");
-            using ManagementObjectCollection disks = searcher.Get();
-
-            foreach (ManagementObject disk in disks.Cast<ManagementObject>())
+            using (disk)
             {
-                using (disk)
+                int number = ReadInt32(GetPropertyValueSafe(disk, "Number"));
+                result[number] = new ImagingDiskStorageInfo
                 {
-                    int number = ReadInt32(GetPropertyValueSafe(disk, "Number"));
-                    result[number] = new ImagingDiskStorageInfo
-                    {
-                        Path = ReadString(GetPropertyValueSafe(disk, "Path")),
-                        Location = ReadString(GetPropertyValueSafe(disk, "Location")),
-                        FriendlyName = ReadString(GetPropertyValueSafe(disk, "FriendlyName")),
-                        UniqueId = ReadString(GetPropertyValueSafe(disk, "UniqueId")),
-                        UniqueIdFormat = FormatUniqueIdFormat(ReadNullableUInt16(GetPropertyValueSafe(disk, "UniqueIdFormat"))),
-                        SerialNumber = ReadString(GetPropertyValueSafe(disk, "SerialNumber")),
-                        FirmwareVersion = ReadString(GetPropertyValueSafe(disk, "FirmwareVersion")),
-                        Manufacturer = ReadString(GetPropertyValueSafe(disk, "Manufacturer")),
-                        Model = ReadString(GetPropertyValueSafe(disk, "Model")),
-                        SizeBytes = ReadUInt64(GetPropertyValueSafe(disk, "Size")),
-                        AllocatedSizeBytes = ReadUInt64(GetPropertyValueSafe(disk, "AllocatedSize")),
-                        LogicalSectorSize = ReadUInt32(GetPropertyValueSafe(disk, "LogicalSectorSize")),
-                        PhysicalSectorSize = ReadUInt32(GetPropertyValueSafe(disk, "PhysicalSectorSize")),
-                        LargestFreeExtentBytes = ReadUInt64(GetPropertyValueSafe(disk, "LargestFreeExtent")),
-                        NumberOfPartitions = ReadUInt32(GetPropertyValueSafe(disk, "NumberOfPartitions")),
-                        ProvisioningType = FormatProvisioningType(ReadNullableUInt16(GetPropertyValueSafe(disk, "ProvisioningType"))),
-                        OperationalStatus = FormatDiskOperationalStatus(GetPropertyValueSafe(disk, "OperationalStatus")),
-                        HealthStatus = FormatHealthStatus(ReadNullableUInt16(GetPropertyValueSafe(disk, "HealthStatus"))),
-                        BusType = FormatBusType(ReadNullableUInt16(GetPropertyValueSafe(disk, "BusType"))),
-                        PartitionStyle = FormatPartitionStyle(ReadNullableUInt16(GetPropertyValueSafe(disk, "PartitionStyle"))),
-                        Signature = ReadNullableUInt32(GetPropertyValueSafe(disk, "Signature")),
-                        Guid = ReadString(GetPropertyValueSafe(disk, "Guid")),
-                        IsOffline = ReadNullableBoolean(GetPropertyValueSafe(disk, "IsOffline")),
-                        OfflineReason = FormatOfflineReason(ReadNullableUInt16(GetPropertyValueSafe(disk, "OfflineReason"))),
-                        IsReadOnly = ReadNullableBoolean(GetPropertyValueSafe(disk, "IsReadOnly")),
-                        IsSystem = ReadNullableBoolean(GetPropertyValueSafe(disk, "IsSystem")),
-                        IsClustered = ReadNullableBoolean(GetPropertyValueSafe(disk, "IsClustered")),
-                        IsBoot = ReadNullableBoolean(GetPropertyValueSafe(disk, "IsBoot")),
-                        BootFromDisk = ReadNullableBoolean(GetPropertyValueSafe(disk, "BootFromDisk"))
-                    };
-                }
+                    Path = ReadString(GetPropertyValueSafe(disk, "Path")),
+                    Location = ReadString(GetPropertyValueSafe(disk, "Location")),
+                    FriendlyName = ReadString(GetPropertyValueSafe(disk, "FriendlyName")),
+                    UniqueId = ReadString(GetPropertyValueSafe(disk, "UniqueId")),
+                    UniqueIdFormat = FormatUniqueIdFormat(ReadNullableUInt16(GetPropertyValueSafe(disk, "UniqueIdFormat"))),
+                    SerialNumber = ReadString(GetPropertyValueSafe(disk, "SerialNumber")),
+                    FirmwareVersion = ReadString(GetPropertyValueSafe(disk, "FirmwareVersion")),
+                    Manufacturer = ReadString(GetPropertyValueSafe(disk, "Manufacturer")),
+                    Model = ReadString(GetPropertyValueSafe(disk, "Model")),
+                    SizeBytes = ReadUInt64(GetPropertyValueSafe(disk, "Size")),
+                    AllocatedSizeBytes = ReadUInt64(GetPropertyValueSafe(disk, "AllocatedSize")),
+                    LogicalSectorSize = ReadUInt32(GetPropertyValueSafe(disk, "LogicalSectorSize")),
+                    PhysicalSectorSize = ReadUInt32(GetPropertyValueSafe(disk, "PhysicalSectorSize")),
+                    LargestFreeExtentBytes = ReadUInt64(GetPropertyValueSafe(disk, "LargestFreeExtent")),
+                    NumberOfPartitions = ReadUInt32(GetPropertyValueSafe(disk, "NumberOfPartitions")),
+                    ProvisioningType = FormatProvisioningType(ReadNullableUInt16(GetPropertyValueSafe(disk, "ProvisioningType"))),
+                    OperationalStatus = FormatDiskOperationalStatus(GetPropertyValueSafe(disk, "OperationalStatus")),
+                    HealthStatus = FormatHealthStatus(ReadNullableUInt16(GetPropertyValueSafe(disk, "HealthStatus"))),
+                    BusType = FormatBusType(ReadNullableUInt16(GetPropertyValueSafe(disk, "BusType"))),
+                    PartitionStyle = FormatPartitionStyle(ReadNullableUInt16(GetPropertyValueSafe(disk, "PartitionStyle"))),
+                    Signature = ReadNullableUInt32(GetPropertyValueSafe(disk, "Signature")),
+                    Guid = ReadString(GetPropertyValueSafe(disk, "Guid")),
+                    IsOffline = ReadNullableBoolean(GetPropertyValueSafe(disk, "IsOffline")),
+                    OfflineReason = FormatOfflineReason(ReadNullableUInt16(GetPropertyValueSafe(disk, "OfflineReason"))),
+                    IsReadOnly = ReadNullableBoolean(GetPropertyValueSafe(disk, "IsReadOnly")),
+                    IsSystem = ReadNullableBoolean(GetPropertyValueSafe(disk, "IsSystem")),
+                    IsClustered = ReadNullableBoolean(GetPropertyValueSafe(disk, "IsClustered")),
+                    IsBoot = ReadNullableBoolean(GetPropertyValueSafe(disk, "IsBoot")),
+                    BootFromDisk = ReadNullableBoolean(GetPropertyValueSafe(disk, "BootFromDisk"))
+                };
             }
-        }
-        catch (Exception ex)
-        {
-            error = ex.Message;
         }
 
         return result;
     }
 
-    private static Dictionary<(int DiskNumber, ulong OffsetBytes), ImagingPartitionStorageInfo> GetStoragePartitionsBestEffort(
-        out string error)
+    private static Dictionary<(int DiskNumber, ulong OffsetBytes), ImagingPartitionStorageInfo> GetStoragePartitions()
     {
         Dictionary<(int DiskNumber, ulong OffsetBytes), ImagingPartitionStorageInfo> result = new();
-        error = string.Empty;
 
-        try
+        using ManagementObjectSearcher searcher = new(
+            @"root\Microsoft\Windows\Storage",
+            "SELECT * FROM MSFT_Partition");
+        using ManagementObjectCollection partitions = searcher.Get();
+
+        foreach (ManagementObject partition in partitions.Cast<ManagementObject>())
         {
-            using ManagementObjectSearcher searcher = new(
-                @"root\Microsoft\Windows\Storage",
-                "SELECT * FROM MSFT_Partition");
-            using ManagementObjectCollection partitions = searcher.Get();
-
-            foreach (ManagementObject partition in partitions.Cast<ManagementObject>())
+            using (partition)
             {
-                using (partition)
+                int diskNumber = ReadInt32(GetPropertyValueSafe(partition, "DiskNumber"));
+                ulong offset = ReadUInt64(GetPropertyValueSafe(partition, "Offset"));
+                int storagePartitionNumber = ReadInt32(GetPropertyValueSafe(partition, "PartitionNumber"));
+                string driveLetter = ReadDriveLetter(GetPropertyValueSafe(partition, "DriveLetter"));
+                string rawGptType = ReadString(GetPropertyValueSafe(partition, "GptType"));
+
+                result[(diskNumber, offset)] = new ImagingPartitionStorageInfo
                 {
-                    int diskNumber = ReadInt32(GetPropertyValueSafe(partition, "DiskNumber"));
-                    ulong offset = ReadUInt64(GetPropertyValueSafe(partition, "Offset"));
-                    int storagePartitionNumber = ReadInt32(GetPropertyValueSafe(partition, "PartitionNumber"));
-                    string driveLetter = ReadDriveLetter(GetPropertyValueSafe(partition, "DriveLetter"));
-
-                    string rawGptType = ReadString(GetPropertyValueSafe(partition, "GptType"));
-
-                    result[(diskNumber, offset)] = new ImagingPartitionStorageInfo
-                    {
-                        DiskNumber = diskNumber,
-                        PartitionNumber = storagePartitionNumber,
-                        DriveLetter = driveLetter,
-                        AccessPaths = ReadStringArray(GetPropertyValueSafe(partition, "AccessPaths")),
-                        OperationalStatus = FormatPartitionOperationalStatus(GetPropertyValueSafe(partition, "OperationalStatus")),
-                        TransitionState = FormatPartitionTransitionState(ReadNullableUInt16(GetPropertyValueSafe(partition, "TransitionState"))),
-                        SizeBytes = ReadUInt64(GetPropertyValueSafe(partition, "Size")),
-                        OffsetBytes = offset,
-                        MbrType = FormatMbrType(ReadNullableUInt16(GetPropertyValueSafe(partition, "MbrType"))),
-                        GptTypeGuid = NormalizeGptTypeGuid(rawGptType),
-                        GptType = FormatGptType(rawGptType),
-                        Guid = ReadString(GetPropertyValueSafe(partition, "Guid")),
-                        IsReadOnly = ReadNullableBoolean(GetPropertyValueSafe(partition, "IsReadOnly")),
-                        IsOffline = ReadNullableBoolean(GetPropertyValueSafe(partition, "IsOffline")),
-                        IsSystem = ReadNullableBoolean(GetPropertyValueSafe(partition, "IsSystem")),
-                        IsBoot = ReadNullableBoolean(GetPropertyValueSafe(partition, "IsBoot")),
-                        IsActive = ReadNullableBoolean(GetPropertyValueSafe(partition, "IsActive")),
-                        IsHidden = ReadNullableBoolean(GetPropertyValueSafe(partition, "IsHidden")),
-                        IsShadowCopy = ReadNullableBoolean(GetPropertyValueSafe(partition, "IsShadowCopy")),
-                        NoDefaultDriveLetter = ReadNullableBoolean(GetPropertyValueSafe(partition, "NoDefaultDriveLetter"))
-                    };
-                }
+                    DiskNumber = diskNumber,
+                    PartitionNumber = storagePartitionNumber,
+                    DriveLetter = driveLetter,
+                    AccessPaths = ReadStringArray(GetPropertyValueSafe(partition, "AccessPaths")),
+                    OperationalStatus = FormatPartitionOperationalStatus(GetPropertyValueSafe(partition, "OperationalStatus")),
+                    TransitionState = FormatPartitionTransitionState(ReadNullableUInt16(GetPropertyValueSafe(partition, "TransitionState"))),
+                    SizeBytes = ReadUInt64(GetPropertyValueSafe(partition, "Size")),
+                    OffsetBytes = offset,
+                    MbrType = FormatMbrType(ReadNullableUInt16(GetPropertyValueSafe(partition, "MbrType"))),
+                    GptTypeGuid = NormalizeGptTypeGuid(rawGptType),
+                    GptType = FormatGptType(rawGptType),
+                    Guid = ReadString(GetPropertyValueSafe(partition, "Guid")),
+                    IsReadOnly = ReadNullableBoolean(GetPropertyValueSafe(partition, "IsReadOnly")),
+                    IsOffline = ReadNullableBoolean(GetPropertyValueSafe(partition, "IsOffline")),
+                    IsSystem = ReadNullableBoolean(GetPropertyValueSafe(partition, "IsSystem")),
+                    IsBoot = ReadNullableBoolean(GetPropertyValueSafe(partition, "IsBoot")),
+                    IsActive = ReadNullableBoolean(GetPropertyValueSafe(partition, "IsActive")),
+                    IsHidden = ReadNullableBoolean(GetPropertyValueSafe(partition, "IsHidden")),
+                    IsShadowCopy = ReadNullableBoolean(GetPropertyValueSafe(partition, "IsShadowCopy")),
+                    NoDefaultDriveLetter = ReadNullableBoolean(GetPropertyValueSafe(partition, "NoDefaultDriveLetter"))
+                };
             }
-        }
-        catch (Exception ex)
-        {
-            error = ex.Message;
         }
 
         return result;
@@ -555,14 +533,14 @@ public sealed class DiskInventory
         {
             return new BitLockerStatusSnapshot(
                 new BitLockerCompositeBackend().GetVolumes(),
-                Available: true,
+                QuerySucceeded: true,
                 Error: string.Empty);
         }
         catch (Exception ex)
         {
             return new BitLockerStatusSnapshot(
                 Array.Empty<BitLockerVolumeInfo>(),
-                Available: false,
+                QuerySucceeded: false,
                 Error: ex.Message);
         }
     }
@@ -919,6 +897,6 @@ public sealed class DiskInventory
 
     private readonly record struct BitLockerStatusSnapshot(
         IReadOnlyList<BitLockerVolumeInfo> Volumes,
-        bool Available,
+        bool QuerySucceeded,
         string Error);
 }

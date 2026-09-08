@@ -18,7 +18,7 @@ public sealed class FfuCaptureAssessment
     {
         ArgumentNullException.ThrowIfNull(disk);
 
-        if (!disk.BitLockerStatusAvailable)
+        if (!disk.BitLockerStatusQuerySucceeded)
         {
             return new FfuCaptureAssessment
             {

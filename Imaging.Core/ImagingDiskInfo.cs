@@ -13,13 +13,9 @@ public sealed class ImagingDiskInfo
     public ulong SizeBytes { get; init; }
     public bool? IsOffline { get; init; }
     public ImagingDiskStorageInfo? StorageInfo { get; init; }
-    public bool StorageInfoAvailable { get; init; }
-    public string StorageInfoError { get; init; } = string.Empty;
-    public bool PartitionStorageInfoAvailable { get; init; }
-    public string PartitionStorageInfoError { get; init; } = string.Empty;
     public IReadOnlyList<ImagingPartitionInfo> Partitions { get; init; } = Array.Empty<ImagingPartitionInfo>();
     public IReadOnlyList<ImagingBitLockerVolumeInfo> BitLockerVolumes { get; init; } = Array.Empty<ImagingBitLockerVolumeInfo>();
-    public bool BitLockerStatusAvailable { get; init; }
+    public bool BitLockerStatusQuerySucceeded { get; init; }
     public string BitLockerStatusError { get; init; } = string.Empty;
 
     public string DisplayName => $"Disk {DiskNumber}";
