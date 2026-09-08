@@ -75,44 +75,53 @@ The repository includes `global.json` to keep command-line builds on the .NET 8 
 
 ### Target WinPE image
 
-The published applications target `win-x64`. The target environment must therefore be an x64 Windows PE image with the drivers and optional components needed by the features being used.
+The published applications target `win-x64`. The supported target is an x64 Windows PE image built with the required optional-component profile below. WinPE GUI Shell no longer supports reduced-function operation when these components are omitted.
 
-For the complete shell, the expected configuration includes:
+Required configuration:
 
 - A current x64 Windows PE image created from the Windows ADK and matching Windows PE add-on.
 - `WinPE-WMI`.
+- `WinPE-NetFX`.
+- `WinPE-Scripting`.
+- `WinPE-PowerShell`.
+- `WinPE-StorageWMI`.
 - `WinPE-SecureStartup`.
 - A matching `imageres.dll.mun` supplied from the user's own properly licensed Windows installation or deployment media and added to the WinPE image. This should be treated as required for the intended shell icon set and complete UI appearance.
 - Required storage, USB, network, display, and other hardware drivers for the target systems.
 - Administrative execution for BitLocker management, imaging, and other privileged shell operations.
 
-`WinPE-WMI` is used by the shell for WMI-based device, physical-disk, drive-state, and BitLocker-related operations.
+The Storage WMI optional component brings a dependency chain with it: `WinPE-WMI` -> `WinPE-NetFX` -> `WinPE-Scripting` -> `WinPE-PowerShell` -> `WinPE-StorageWMI`. `WinPE-SecureStartup` also depends on `WinPE-WMI`. Install packages that match the architecture and ADK build of the WinPE image and, where applicable, add the corresponding language packages.
 
-`WinPE-SecureStartup` provides BitLocker and TPM support, including the BitLocker command-line tools and WMI management libraries. Install `WinPE-WMI` before `WinPE-SecureStartup`.
+`WinPE-WMI` supplies the WMI infrastructure used throughout the shell for device, drive-state, physical-disk, and management operations.
 
-The BitLocker status backend expects `manage-bde.exe`, which is supplied by the WinPE Secure Startup component.
+`WinPE-StorageWMI` is required by Imaging Manager. The physical-disk inventory uses the native `MSFT_Disk` and `MSFT_Partition` storage-provider classes as part of its normal data model rather than treating them as optional enrichment.
+
+`WinPE-SecureStartup` provides BitLocker and TPM support, including `manage-bde.exe` and the `Win32_EncryptableVolume` WMI provider used by the shell, BitLocker Manager, and imaging safety checks.
+
+Windows PowerShell is included in the supported image because it is part of the StorageWMI dependency chain. The taskbar exposes PowerShell directly in the Start menu, and PowerShell script file associations assume the executable is present.
+
+The applications themselves are published as self-contained .NET 8 executables. They do not require the .NET desktop runtime in the WinPE image. `WinPE-NetFX` is nevertheless required by the supported image because it is a prerequisite in the WinPE StorageWMI package chain; WinPE GUI Shell does not use WinPE-NetFX as its application runtime.
+
+The WinPE launcher validates the required runtime profile before starting the taskbar and file-manager hosts. In WinPE it verifies base WMI, the SecureStartup/BitLocker provider and `manage-bde.exe`, Windows PowerShell, and the Storage WMI `MSFT_Disk`/`MSFT_Partition` providers. If those requirements are missing or unusable, the launcher reports the configuration error instead of starting a degraded shell. Full-Windows development runs skip this WinPE-image validation.
 
 Imaging Manager uses the Windows deployment tools available in WinPE, including `DISM.exe`, `DiskPart.exe`, and BCDBoot where appropriate. Automatic Windows RE staging/configuration also requires `reagentc.exe` to be available either in WinPE or in the selected/applied offline Windows installation.
 
 Imaging Manager uses `ExplorerPicker.exe` for its file and folder selection dialogs and reuses `BitLocker.Unlock.exe` for integrated volume unlock operations. Those companion executables should be deployed alongside `Imaging.Manager.exe`.
 
-The applications are published as self-contained .NET 8 executables. The target image does not require the .NET desktop runtime or `WinPE-NetFX` solely to run WinPE GUI Shell.
+### Required profile and additional environment support
 
-When adding WinPE optional components, use packages that match the architecture and ADK build of the WinPE image. Where applicable, also add the corresponding language package.
-
-### Minimum and optional functionality
-
-| Component | Needed for |
+| Component | Role |
 | --- | --- |
-| Base x64 WinPE | Starting the shell, basic local file management, and Windows deployment tools such as DISM/DiskPart. |
-| `WinPE-WMI` | Full drive monitoring, physical-disk inventory, WMI device operations, and BitLocker state integration. |
-| `WinPE-SecureStartup` | BitLocker status, unlock, lock, management functionality, and BitLocker-aware imaging integration. |
-| `imageres.dll.mun` from a licensed Windows source | Intended Windows-style shell imagery, including the Start button icon and other icons used by the taskbar, Start menu, file manager, BitLocker Manager, and Imaging Manager. |
-| Network drivers and WinPE networking | Network shares, mapped drives, and network tools. |
-| PowerShell optional components | Only external scripts or workflows that specifically require Windows PowerShell. The shell itself does not require PowerShell. |
-| Additional font/language packages | Languages or scripts not present in the base image. |
-
-Features whose supporting WinPE components are absent may be unavailable or fail when invoked. The complete supported configuration should include both `WinPE-WMI` and `WinPE-SecureStartup`.
+| Base x64 WinPE | Shell host and Windows deployment tools such as DISM and DiskPart. |
+| `WinPE-WMI` | Required WMI infrastructure for drive, device, BitLocker, and imaging inventory. |
+| `WinPE-NetFX` | Required transitive dependency of the StorageWMI package chain; not the runtime used by the self-contained GUI executables. |
+| `WinPE-Scripting` | Required transitive dependency of the StorageWMI package chain. |
+| `WinPE-PowerShell` | Required by the StorageWMI package chain and exposed by the shell Start menu. |
+| `WinPE-StorageWMI` | Required `MSFT_Disk` and `MSFT_Partition` provider used by Imaging Manager. |
+| `WinPE-SecureStartup` | Required BitLocker status, unlock, lock, management, and imaging integration. |
+| `imageres.dll.mun` from a licensed Windows source | Required intended Windows-style shell imagery, including the Start button and application icons. |
+| Network drivers and WinPE networking | Needed when network shares, mapped drives, or network tools are used. |
+| Additional font/language packages | Needed for languages or scripts not present in the base image. |
 
 ## Imaging Manager
 
@@ -343,7 +352,7 @@ For a mounted WIM, driver changes remain pending until **Commit** saves them to 
 
 **Get Info** opens the detailed disk, partition, or mounted-WIM information for the current selection. This keeps the main window focused on selection and operations instead of permanently displaying verbose status text.
 
-For disks and partitions, the details window supplements the existing Win32/WMI inventory with the native `MSFT_Disk` and `MSFT_Partition` storage-provider data used by the Windows Storage stack. Disk details include identity, model/firmware, size/allocation, partition style, bus/provisioning type, operational/health state, online/read-only/system/boot flags, sector sizes, free extent, unique ID/GUID/signature, and location where available. Partition details include disk/partition identity, drive/access paths, size/offset, GPT/MBR type, operational/transition state, read-only/offline/system/boot/active/hidden attributes, volume capacity/filesystem information for accessible lettered volumes, and BitLocker details. The application queries these providers directly and does not require PowerShell; if the Storage WMI provider is unavailable in a minimal PE image, the dialog falls back to the information available from the existing Win32 inventory.
+For disks and partitions, the details window combines the Win32/WMI inventory with the required native `MSFT_Disk` and `MSFT_Partition` storage-provider data used by the Windows Storage stack. Disk details include identity, model/firmware, size/allocation, partition style, bus/provisioning type, operational/health state, online/read-only/system/boot flags, sector sizes, free extent, unique ID/GUID/signature, and location where available. Partition details include disk/partition identity, drive/access paths, size/offset, GPT/MBR type, operational/transition state, read-only/offline/system/boot/active/hidden attributes, volume capacity/filesystem information for accessible lettered volumes, and BitLocker details. A particular disk or partition can still lack a matching Storage-provider record if device correlation fails, but absence of the Storage WMI provider itself is no longer a supported operating mode.
 
 **Refresh** re-queries both the physical-disk inventory and DISM's mounted-WIM inventory. Physical-disk inventory refresh is asynchronous and coalesced, and Imaging Manager also listens for storage-topology and BitLocker-state changes so inserted/removed drives and lock-state changes can be reflected without a manual refresh. Imaging/servicing operations remain intentionally serialized: only one operation is started at a time, while the live disk inventory may continue to refresh in the background.
 
@@ -596,8 +605,8 @@ Important scenarios include:
 - Supervisor, taskbar, and file-manager startup and restart behavior.
 - Shutdown and reboot from the shell.
 - Shutdown/reboot mounted-WIM guard, including Open Imaging Manager, Continue Anyway, and failed-inventory warning paths.
-- Operation with the intended `WinPE-WMI` and `WinPE-SecureStartup` components.
-- Behavior when required optional components are absent.
+- Launcher validation of the complete required WinPE optional-component profile.
+- Operation with `WinPE-WMI`, `WinPE-StorageWMI`, and `WinPE-SecureStartup` active.
 - BitLocker status and management.
 - Passphrase unlock.
 - Recovery-password unlock.
