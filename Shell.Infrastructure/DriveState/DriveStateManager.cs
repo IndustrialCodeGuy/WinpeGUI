@@ -55,7 +55,6 @@ public sealed class DriveStateManager
         public bool HasVisualState => VisualState != BitLockerVisualState.None;
     }
 
-    private readonly BitLockerRuntimeCapabilities _bitLockerCapabilities;
     private readonly Dictionary<string, DriveSnapshot> _drivesByRoot = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, BitLockerDriveStatus> _bitLockerStatusByRoot = new(StringComparer.OrdinalIgnoreCase);
 
@@ -65,11 +64,6 @@ public sealed class DriveStateManager
     private bool _bitLockerRefreshQueuedOrRunning;
 
     public event EventHandler<DriveStatesChangedEventArgs>? DriveStatesChanged;
-
-    public DriveStateManager(BitLockerRuntimeCapabilities? bitLockerCapabilities = null)
-    {
-        _bitLockerCapabilities = bitLockerCapabilities ?? BitLockerRuntimeCapabilities.Detect();
-    }
 
     public void RefreshAll()
     {
@@ -139,20 +133,14 @@ public sealed class DriveStateManager
 
     public void RequestBitLockerStateRefresh(string pathOrRoot)
     {
-        if (!_bitLockerCapabilities.CanReadStatus ||
-            string.IsNullOrWhiteSpace(pathOrRoot))
-        {
+        if (string.IsNullOrWhiteSpace(pathOrRoot))
             return;
-        }
 
         QueueBitLockerRefresh(NormalizeDriveRoot(pathOrRoot));
     }
 
     public void RequestBitLockerStatesRefresh()
     {
-        if (!_bitLockerCapabilities.CanReadStatus)
-            return;
-
         QueueBitLockerRefresh(null);
     }
 
@@ -541,9 +529,6 @@ public sealed class DriveStateManager
 
     private void QueueBitLockerRefresh(string? driveRoot)
     {
-        if (!_bitLockerCapabilities.CanReadStatus)
-            return;
-
         lock (_sync)
         {
             if (string.IsNullOrWhiteSpace(driveRoot))
