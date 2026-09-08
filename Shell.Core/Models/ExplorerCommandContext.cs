@@ -33,7 +33,6 @@ public sealed class ExplorerCommandContext
     public int? IssueHResult { get; init; }
     public string? IssueMessage { get; init; }
 
-    public bool CanUseExplorerBitLockerUi { get; init; }
     public bool CanEjectDriveDevice { get; init; }
     public bool CanPaste { get; init; }
     public bool CanCreateFolder { get; init; }
