@@ -454,12 +454,10 @@ public partial class MainForm
                 AppendInfoLine(text, "MBR signature", $"0x{storage.Signature.Value:X8}");
         }
 
-        if (!disk.StorageInfoAvailable)
+        if (storage == null)
         {
             AppendInfoSection(text, "Storage provider");
-            text.AppendLine("Detailed MSFT_Disk information is unavailable in this environment.");
-            if (!string.IsNullOrWhiteSpace(disk.StorageInfoError))
-                AppendInfoLine(text, "Error", disk.StorageInfoError);
+            text.AppendLine("No matching MSFT_Disk record was returned for this disk.");
         }
 
         AppendBitLockerDetails(text, disk);
@@ -533,9 +531,7 @@ public partial class MainForm
         if (storage == null)
         {
             AppendInfoSection(text, "Storage provider");
-            text.AppendLine("Detailed MSFT_Partition information is unavailable for this partition.");
-            if (disk != null && !disk.PartitionStorageInfoAvailable && !string.IsNullOrWhiteSpace(disk.PartitionStorageInfoError))
-                AppendInfoLine(text, "Error", disk.PartitionStorageInfoError);
+            text.AppendLine("No matching MSFT_Partition record was returned for this partition.");
         }
 
         return text.ToString().TrimEnd();
@@ -578,7 +574,7 @@ public partial class MainForm
     private void AppendBitLockerDetails(StringBuilder text, ImagingDiskInfo disk)
     {
         AppendInfoSection(text, "BitLocker");
-        if (!disk.BitLockerStatusAvailable)
+        if (!disk.BitLockerStatusQuerySucceeded)
         {
             text.AppendLine("BitLocker status unavailable; encryption state could not be verified.");
             if (!string.IsNullOrWhiteSpace(disk.BitLockerStatusError))
