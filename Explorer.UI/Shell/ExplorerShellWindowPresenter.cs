@@ -438,7 +438,6 @@ internal sealed class ExplorerShellWindowPresenter
             IssueKind = row.IssueKind,
             IssueHResult = row.IssueHResult,
             IssueMessage = row.IssueMessage,
-            CanUseExplorerBitLockerUi = _commands.CanUseExplorerBitLockerUi,
             CanEjectDriveDevice = CanEjectDriveDevice(row.DriveType, row.FullPath),
             CanPaste = CanPasteIntoPath(row.FullPath),
             CanCreateFolder = false,
@@ -463,7 +462,6 @@ internal sealed class ExplorerShellWindowPresenter
             IsThisPcView = isThisPc,
             IsBackground = true,
             IsTreeTarget = false,
-            CanUseExplorerBitLockerUi = _commands.CanUseExplorerBitLockerUi,
             CanPaste = CanPasteIntoCurrentLocation(),
             CanCreateFolder = !isThisPc && CanCreateNewFolderInCurrentLocation(),
             CanShowCurrentLocationProperties = !isThisPc && Directory.Exists(_currentPath),
@@ -492,7 +490,6 @@ internal sealed class ExplorerShellWindowPresenter
             IssueKind = tag.IssueKind,
             IssueHResult = tag.IssueHResult,
             IssueMessage = tag.IssueMessage,
-            CanUseExplorerBitLockerUi = _commands.CanUseExplorerBitLockerUi,
             CanEjectDriveDevice = CanEjectDriveDevice(tag.DriveType, tag.Path),
             CanPaste = CanPasteIntoPath(tag.Path),
             CanCreateFolder = false,
@@ -513,7 +510,6 @@ internal sealed class ExplorerShellWindowPresenter
             IsThisPcView = IsThisPcPath(_currentPath),
             IsBackground = false,
             IsTreeTarget = false,
-            CanUseExplorerBitLockerUi = _commands.CanUseExplorerBitLockerUi,
             CanPaste = false,
             CanCreateFolder = false,
             CanShowCurrentLocationProperties = false,
@@ -667,15 +663,7 @@ internal sealed class ExplorerShellWindowPresenter
                 }
 
                 if (isLocked == true)
-                {
-                    if (_commands.CanUseExplorerBitLockerUi)
-                        return LaunchBitLockerUnlockForNavigation(path, openInNewWindowAfterUnlock: false);
-
-                    _commands.ShowDriveNotReadyMessage(path, issueKind, issueMessage);
-                    RestoreTreeSelectionToThisPc();
-
-                    return true;
-                }
+                    return LaunchBitLockerUnlockForNavigation(path, openInNewWindowAfterUnlock: false);
 
                 if (HasDriveIssue(issueKind))
                 {
