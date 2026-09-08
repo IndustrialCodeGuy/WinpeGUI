@@ -8,9 +8,6 @@ public enum DriveIssueKind
     RemovableNoMediaOrUnavailable,
 
     BitLockerLocked,
-    BitLockerStatusUnavailableNotElevated,
-    BitLockerStatusProviderUnavailable,
-    BitLockerStatusCheckFailed,
 
     AccessDenied,
     UnrecognizedVolume,
