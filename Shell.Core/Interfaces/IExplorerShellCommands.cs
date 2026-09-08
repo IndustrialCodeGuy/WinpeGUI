@@ -12,7 +12,6 @@ public enum ExplorerBitLockerAction
 
 public interface IExplorerShellCommands
 {
-    bool CanUseExplorerBitLockerUi { get; }
     bool CanEjectDriveDevice(string driveRoot);
 
     void ShowDriveNotReadyMessage(
