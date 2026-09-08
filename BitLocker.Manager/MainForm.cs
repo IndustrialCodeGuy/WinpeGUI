@@ -78,7 +78,7 @@ public partial class MainForm : Form
         if (SynchronizationContext.Current is null)
             SynchronizationContext.SetSynchronizationContext(uiContext);
 
-        _storageChangeCoordinator = new StorageChangeCoordinator(uiContext, monitorBitLocker: true);
+        _storageChangeCoordinator = new StorageChangeCoordinator(uiContext);
         _storageChangeCoordinator.StorageChanged += StorageChangeCoordinator_StorageChanged;
         _storageChangeCoordinator.Start();
 
