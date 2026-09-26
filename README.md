@@ -90,58 +90,61 @@ tools](Docs/Images/winpe-management-tools.png)
 The source tree is divided into executable and supporting library
 projects:
 
-  -----------------------------------------------------------------------
-  Project                             Purpose
-  ----------------------------------- -----------------------------------
-  `WinPEGui`                          Windowless supervisor intended to
-                                      be started by `winpeshl.ini`.
-                                      Builds `WinPEGui.exe`.
+  ---------------------------------------------------------------------
+  Project                            Purpose
+  ---------------------------------- ----------------------------------
+  `WinPEGui`                         Windowless supervisor intended to
+                                     be started by `winpeshl.ini`.
+                                     Builds `WinPEGui.exe`.
 
-  `Shell.Taskbar.Host`                Hosts the desktop, taskbar, Start
-                                      menu, and task-window tracking.
+  `Shell.Taskbar.Host`               Hosts the desktop, taskbar, Start
+                                     menu, and task-window tracking.
 
-  `Explorer.Host`                     Builds `FileManager.exe`, which
-                                      hosts file-manager windows, file
-                                      operations, and the picker service.
+  `Explorer.Host`                    Builds `FileManager.exe`, which
+                                     hosts file-manager windows, file
+                                     operations, and the picker
+                                     service.
 
-  `ExplorerPicker`                    Command-line client for open-file,
-                                      save-file, and folder-selection
-                                      dialogs.
+  `ExplorerPicker`                   Command-line client for open-file,
+                                     save-file, and folder-selection
+                                     dialogs.
 
-  `BitLocker.Manager`                 Administrative BitLocker
-                                      volume-management interface.
+  `BitLocker.Manager`                Administrative BitLocker
+                                     volume-management interface.
 
-  `BitLocker.Unlock`                  Per-volume BitLocker unlock prompt.
+  `BitLocker.Unlock`                 Per-volume BitLocker unlock
+                                     prompt.
 
-  `Imaging.Manager`                   Physical-disk and partition imaging
-                                      and offline WIM-servicing
-                                      interface.
+  `Imaging.Manager`                  Physical-disk and partition
+                                     imaging and offline WIM-servicing
+                                     interface.
 
-  `Shell.Core`                        Shared models, contracts, launch
-                                      requests, and picker IPC.
+  `Shell.Core`                       Shared models, contracts, launch
+                                     requests, and picker IPC.
 
-  `Shell.Infrastructure`              File-system, drive-state,
-                                      file-association, and
-                                      window-coordination services.
+  `Shell.Infrastructure`             File-system, drive-state,
+                                     file-association, and
+                                     window-coordination services.
 
-  `Explorer.UI`                       File-manager window and navigation
-                                      user interface.
+  `Explorer.UI`                      File-manager window and navigation
+                                     user interface.
 
-  `Shell.Taskbar`                     Desktop and taskbar user interface.
+  `Shell.Taskbar`                    Desktop and taskbar user
+                                     interface.
 
-  `Shared.Shell`                      Shared Win32 helpers, theming,
-                                      icons, and shell utilities.
+  `Shared.Shell`                     Shared Win32 helpers, theming,
+                                     icons, and shell utilities.
 
-  `BitLocker.Core`                    BitLocker backends, state models,
-                                      and activation helpers.
+  `BitLocker.Core`                   BitLocker backends, state models,
+                                     and activation helpers.
 
-  `Imaging.Core`                      Physical-disk inventory, DISM
-                                      FFU/WIM backends, WIM deployment
-                                      and servicing logic, imaging
-                                      preflight logic, partition
-                                      formatting, temporary drive-letter
-                                      handling, and Windows RE staging.
-  -----------------------------------------------------------------------
+  `Imaging.Core`                     Physical-disk inventory, DISM
+                                     FFU/WIM backends, WIM deployment
+                                     and servicing logic, imaging
+                                     preflight logic, partition
+                                     formatting, temporary drive-letter
+                                     handling, and Windows RE staging.
+  ---------------------------------------------------------------------
 
 `WinPEGui.exe` normally starts and supervises:
 
@@ -252,46 +255,46 @@ alongside `Imaging.Manager.exe`.
 
 ### Required profile and additional environment support
 
-  -----------------------------------------------------------------------
-  Component                           Role
-  ----------------------------------- -----------------------------------
-  Base x64 WinPE                      Shell host and Windows deployment
-                                      tools such as DISM and DiskPart.
+  ---------------------------------------------------------------------
+  Component                          Role
+  ---------------------------------- ----------------------------------
+  Base x64 WinPE                     Shell host and Windows deployment
+                                     tools such as DISM and DiskPart.
 
-  `WinPE-WMI`                         Required WMI infrastructure for
-                                      drive, device, BitLocker, and
-                                      imaging inventory.
+  `WinPE-WMI`                        Required WMI infrastructure for
+                                     drive, device, BitLocker, and
+                                     imaging inventory.
 
-  `WinPE-NetFX`                       Required transitive dependency of
-                                      the StorageWMI package chain; not
-                                      the runtime used by the
-                                      self-contained GUI executables.
+  `WinPE-NetFX`                      Required transitive dependency of
+                                     the StorageWMI package chain; not
+                                     the runtime used by the
+                                     self-contained GUI executables.
 
-  `WinPE-Scripting`                   Required transitive dependency of
-                                      the StorageWMI package chain.
+  `WinPE-Scripting`                  Required transitive dependency of
+                                     the StorageWMI package chain.
 
-  `WinPE-PowerShell`                  Required by the StorageWMI package
-                                      chain and exposed by the shell
-                                      Start menu.
+  `WinPE-PowerShell`                 Required by the StorageWMI package
+                                     chain and exposed by the shell
+                                     Start menu.
 
-  `WinPE-StorageWMI`                  Required `MSFT_Disk` and
-                                      `MSFT_Partition` provider used by
-                                      Imaging Manager.
+  `WinPE-StorageWMI`                 Required `MSFT_Disk` and
+                                     `MSFT_Partition` provider used by
+                                     Imaging Manager.
 
-  `WinPE-SecureStartup`               Required BitLocker status, unlock,
-                                      lock, management, and imaging
-                                      integration.
+  `WinPE-SecureStartup`              Required BitLocker status, unlock,
+                                     lock, management, and imaging
+                                     integration.
 
-  `imageres.dll.mun` from a licensed  Required intended Windows-style
-  Windows source                      shell imagery, including the Start
-                                      button and application icons.
+  `imageres.dll.mun` from a licensed Required intended Windows-style
+  Windows source                     shell imagery, including the Start
+                                     button and application icons.
 
-  Network drivers and WinPE           Needed when network shares, mapped
-  networking                          drives, or network tools are used.
+  Network drivers and WinPE          Needed when network shares, mapped
+  networking                         drives, or network tools are used.
 
-  Additional font/language packages   Needed for languages or scripts not
-                                      present in the base image.
-  -----------------------------------------------------------------------
+  Additional font/language packages  Needed for languages or scripts
+                                     not present in the base image.
+  ---------------------------------------------------------------------
 
 ## Imaging Manager
 
@@ -1165,12 +1168,30 @@ Important scenarios include:
 ## License
 
 Copyright © 2026 Dan Michel.
-https://github.com/IndustrialCodeGuy/WinpeGUI
 
-WinPE GUI Shell is source-available under the PolyForm Noncommercial
-License 1.0.0.
+WinPE GUI Shell is source-available under the **PolyForm Shield License
+1.0.0**.
 
-Noncommercial use is permitted under the license. Commercial or other
-for-profit use requires separate permission from the copyright holder.
+Commercial and professional **use of WinPE GUI as a tool is permitted**.
+This includes use by businesses, internal IT departments, technicians,
+consultants, managed service providers, repair shops, and other
+professionals while performing IT, deployment, recovery, imaging, or
+support work.
 
-See [LICENSE.md](LICENSE.md) for the complete terms.
+The license does **not** permit using WinPE GUI or its code to provide a
+product that competes with WinPE GUI or another product provided by the
+licensor using the software. This includes competing products based on
+modified or incorporated portions of the project.
+
+In practical terms: **using WinPE GUI to perform paid work is allowed;
+turning WinPE GUI or its components into a competing software product is
+not.**
+
+See [LICENSE.md](LICENSE.md) for the complete license terms. If there is
+any conflict between this summary and the license, the terms in
+`LICENSE.md` control.
+
+Windows, Windows PE, DISM, BitLocker, and other Microsoft components and
+resources are subject to their respective Microsoft license terms. This
+project's license applies only to material for which the project
+copyright holder has the right to grant a license.
