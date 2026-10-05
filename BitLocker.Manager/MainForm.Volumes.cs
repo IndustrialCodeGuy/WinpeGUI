@@ -41,19 +41,20 @@ public partial class MainForm
             BackColor = ShellTheme.WindowBack
         };
 
-        _txtVolumeStatus = new Label
+        _txtVolumeStatus = new TextBox
         {
             Left = _mPx.DetailMargin,
             Top = _mPx.DetailMargin,
             Width = 0,
             Height = 0,
-            AutoSize = false,
+            Multiline = true,
+            ReadOnly = true,
+            WordWrap = false,
+            ScrollBars = ScrollBars.Both,
             Font = _statusFont ?? Font,
             BorderStyle = BorderStyle.FixedSingle,
             BackColor = ShellTheme.ContentBack,
             ForeColor = ShellTheme.TextColor,
-            TextAlign = ContentAlignment.TopLeft,
-            UseMnemonic = false,
             Text = "No drive selected"
         };
 

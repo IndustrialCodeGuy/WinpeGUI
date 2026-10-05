@@ -28,7 +28,7 @@ public partial class MainForm : Form
     private Size _lastNormalClientSize;
 
     // Detail pane controls
-    private Label _txtVolumeStatus = null!;
+    private TextBox _txtVolumeStatus = null!;
     private Label _lblStatus = null!;
 
     private Button _btnUnlock = null!;
