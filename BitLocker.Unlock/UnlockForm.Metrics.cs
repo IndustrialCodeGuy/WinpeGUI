@@ -178,11 +178,11 @@ public sealed partial class UnlockForm
         public int RecoveryKeyFileLinkLeftDip { get; init; } = 180;
         public int RecoveryKeyFileLinkWidthDip { get; init; } = 155;
 
-        public int RecoveryKeyIdTopDip { get; init; } = 118;
-        public int RecoveryKeyIdWidthDip { get; init; } = 160;
-        public int RecoveryKeyIdHeightDip { get; init; } = 28;
+        public int RecoveryKeyIdTopDip { get; init; } = 98;
+        public int RecoveryKeyIdWidthDip { get; init; } = 323;
+        public int RecoveryKeyIdHeightDip { get; init; } = 20;
 
-        public int ButtonTopDip { get; init; } = 118;
+        public int ButtonTopDip { get; init; } = 120;
         public int ButtonWidthDip { get; init; } = 75;
         public int ButtonHeightDip { get; init; } = 28;
         public int ButtonGapDip { get; init; } = 5;

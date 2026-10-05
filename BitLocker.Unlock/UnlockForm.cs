@@ -35,6 +35,7 @@ public sealed partial class UnlockForm : Form
 
     private UnlockInputMode _mode = UnlockInputMode.Passphrase;
     private bool _modeInitialized;
+    private bool _formattingRecoveryPassword;
     
     public UnlockForm(string drivePath)
     {
@@ -176,6 +177,7 @@ public sealed partial class UnlockForm : Form
             PasswordChar = '*',
             UseSystemPasswordChar = true
         };
+        _txtSecret.TextChanged += (_, _) => SecretTextChanged();
 
         _lnkRecoveryPassword = new LinkLabel
         {
@@ -210,7 +212,8 @@ public sealed partial class UnlockForm : Form
             Width = _mPx.ButtonWidth,
             Height = _mPx.ButtonHeight,
             Text = "Unlock",
-            UseVisualStyleBackColor = true
+            UseVisualStyleBackColor = true,
+            Enabled = false
         };
         _btnUnlock.Click += (_, _) => UnlockWithCurrentInput();
 
@@ -293,6 +296,7 @@ public sealed partial class UnlockForm : Form
                     if (_txtSecret.PasswordChar != '*')
                         _txtSecret.PasswordChar = '*';
 
+                    _txtSecret.MaxLength = 32767;
                     SetTextIfChanged(_lnkRecoveryPassword, "Use recovery password");
                     SetVisibleIfChanged(_lnkRecoveryKeyFile, false);
                     break;
@@ -308,6 +312,7 @@ public sealed partial class UnlockForm : Form
                     if (_txtSecret.PasswordChar != '\0')
                         _txtSecret.PasswordChar = '\0';
 
+                    _txtSecret.MaxLength = 96;
                     SetTextIfChanged(_lnkRecoveryPassword, "Use password");
                     SetVisibleIfChanged(_lnkRecoveryKeyFile, true);
                     break;
@@ -318,8 +323,89 @@ public sealed partial class UnlockForm : Form
             ResumeLayout(true);
         }
 
+        UpdateUnlockButtonState();
+
         if (!_txtSecret.Focused)
             _txtSecret.Focus();
+    }
+
+    private void SecretTextChanged()
+    {
+        if (_formattingRecoveryPassword)
+            return;
+
+        if (_mode == UnlockInputMode.RecoveryPassword)
+            FormatRecoveryPasswordText();
+
+        UpdateUnlockButtonState();
+    }
+
+    private void FormatRecoveryPasswordText()
+    {
+        string original = _txtSecret.Text;
+        int originalCaret = _txtSecret.SelectionStart;
+        int digitsBeforeCaret = 0;
+
+        for (int i = 0; i < Math.Min(originalCaret, original.Length); i++)
+        {
+            if (original[i] is >= '0' and <= '9')
+                digitsBeforeCaret++;
+        }
+
+        string formatted = BitLockerRecoveryPassword.FormatForDisplay(original);
+        if (string.Equals(original, formatted, StringComparison.Ordinal))
+            return;
+
+        _formattingRecoveryPassword = true;
+        try
+        {
+            _txtSecret.Text = formatted;
+            _txtSecret.SelectionStart = GetCaretPositionForDigitCount(formatted, digitsBeforeCaret);
+        }
+        finally
+        {
+            _formattingRecoveryPassword = false;
+        }
+    }
+
+    private static int GetCaretPositionForDigitCount(string value, int digitCount)
+    {
+        if (digitCount <= 0)
+            return 0;
+
+        int digitsSeen = 0;
+        for (int i = 0; i < value.Length; i++)
+        {
+            if (value[i] is not (>= '0' and <= '9'))
+                continue;
+
+            digitsSeen++;
+            if (digitsSeen == digitCount)
+                return i + 1;
+        }
+
+        return value.Length;
+    }
+
+    private void UpdateUnlockButtonState()
+    {
+        bool enabled;
+
+        if (_mode == UnlockInputMode.Passphrase)
+        {
+            enabled = _txtSecret.TextLength > 0;
+        }
+        else
+        {
+            // Keep the button disabled until all 48 digits are present. The
+            // backend then asks BitLocker to validate the checksum/format before
+            // attempting the actual unlock so invalid input gets an explicit
+            // error message rather than a silently disabled button.
+            enabled = BitLockerRecoveryPassword.HasCompleteLength(_txtSecret.Text);
+        }
+
+        if (_btnUnlock.Enabled != enabled)
+            _btnUnlock.Enabled = enabled;
     }
 
     private string GetRecoveryKeyIdText()
@@ -330,11 +416,18 @@ public sealed partial class UnlockForm : Form
         if (_volume == null)
             return "Recovery Key ID:";
 
-        string keyIdPrefix = _backend.GetRecoveryKeyIdPrefix(_volume.MountPoint);
+        IReadOnlyList<string> keyIdPrefixes = _volume.KeyProtectors
+            .Where(static protector => protector.TypeCode == 3)
+            .Select(static protector => protector.IdPrefix)
+            .Where(static prefix => !string.IsNullOrWhiteSpace(prefix))
+            .ToArray();
 
-        _recoveryKeyIdText = string.IsNullOrWhiteSpace(keyIdPrefix)
-            ? "Recovery Key ID: Not found"
-            : $"Recovery Key ID: {keyIdPrefix}";
+        _recoveryKeyIdText = keyIdPrefixes.Count switch
+        {
+            0 => "Recovery Key ID: Not found",
+            1 => $"Recovery Key ID: {keyIdPrefixes[0]}",
+            _ => $"Recovery Key IDs: {string.Join(", ", keyIdPrefixes)}"
+        };
 
         return _recoveryKeyIdText;
     }
