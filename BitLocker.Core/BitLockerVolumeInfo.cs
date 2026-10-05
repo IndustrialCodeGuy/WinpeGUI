@@ -1,7 +1,7 @@
 namespace BitLocker.Core;
 
-// UI-facing volume snapshot. Some fields are only populated by one backend,
-// so callers should treat missing strings as optional display data.
+// UI-facing volume snapshot. Structured state comes from WMI; StatusText is
+// optional display text (normally the familiar manage-bde status block).
 public sealed class BitLockerVolumeInfo
 {
     public string MountPoint { get; init; } = string.Empty;
@@ -18,7 +18,9 @@ public sealed class BitLockerVolumeInfo
     public bool IsProtectionOff => VisualState == BitLockerVisualState.ProtectionOff;
     public bool IsSystemVolume { get; init; }
     public string VolumeTypeText { get; init; } = string.Empty;
+    public string EncryptionMethodText { get; init; } = string.Empty;
     public string RecoveryKeyId { get; init; } = string.Empty;
+    public IReadOnlyList<BitLockerKeyProtectorInfo> KeyProtectors { get; init; } = Array.Empty<BitLockerKeyProtectorInfo>();
     public IReadOnlyList<string> ProtectorSummary { get; init; } = Array.Empty<string>();
     public string StatusText { get; init; } = string.Empty;
 

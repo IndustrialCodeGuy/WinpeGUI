@@ -5,9 +5,10 @@ namespace BitLocker.Core;
 
 public sealed class BitLockerManageBdeBackend
 {
-    // The status parser intentionally consumes manage-bde output as blocks. This
-    // keeps the UI status pane close to the command-line text while extracting
-    // only the fields needed for drive state and icons.
+    // The status parser consumes manage-bde output as blocks so the UI can keep
+    // the familiar native status text. The composite backend now treats WMI as
+    // authoritative for structured state; these parsed fields remain useful to
+    // standalone callers and as display/fallback metadata.
     private static readonly Regex VolumeHeaderRegex = new(
         @"^Volume\s+([A-Z]:)\s*(?:\[(.*)\])?\s*$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -124,6 +125,7 @@ public sealed class BitLockerManageBdeBackend
             VisualState = resolvedState.VisualState,
             IsSystemVolume = isSystemVolume,
             VolumeTypeText = GetVolumeTypeText(mountPoint, isSystemVolume),
+            EncryptionMethodText = string.IsNullOrWhiteSpace(encryptionMethod) ? "Unknown" : encryptionMethod,
             RecoveryKeyId = string.Empty,
             ProtectorSummary = Array.Empty<string>(),
             StatusText = string.Join(Environment.NewLine, blockLines)

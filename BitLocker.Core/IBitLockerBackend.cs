@@ -7,5 +7,5 @@ public interface IBitLockerBackend
     BitLockerOperationResult UnlockWithPassphrase(string mountPoint, char[] passphrase);
     BitLockerOperationResult UnlockWithRecoveryPassword(string mountPoint, char[] recoveryPassword);
     BitLockerOperationResult UnlockWithRecoveryKeyFile(string mountPoint, string keyFilePath);
-    BitLockerOperationResult Lock(string mountPoint);
+    BitLockerOperationResult Lock(string mountPoint, bool forceDismount = false);
 }
